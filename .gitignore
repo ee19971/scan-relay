@@ -1,0 +1,30 @@
+# ---- Office 加载项 (Node) ----
+addin/node_modules/
+addin/dist/
+addin/.eslintcache
+
+# ---- 中转服务 (Python) ----
+server/__pycache__/
+*.pyc
+# 运行时自动生成的证书（私钥绝不能入库）
+server/.certs/
+
+# ---- Flutter App ----
+mobile/build/
+mobile/.dart_tool/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/app/.cxx/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+
+# ---- 发布签名（绝不能入库） ----
+key.properties
+*.jks
+*.keystore
+*.pem
+*.key
+
+# ---- 杂项 ----
+*.log
+.DS_Store

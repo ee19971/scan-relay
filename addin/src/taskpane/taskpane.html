@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Scan-Relay 扫码录入</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+      margin: 0; padding: 12px; background: #f6f7f9; color: #222;
+      font-size: 13px;
+    }
+    h2 { font-size: 15px; margin: 0 0 8px; }
+    .card {
+      background: #fff; border: 1px solid #e1e4e8; border-radius: 8px;
+      padding: 12px; margin-bottom: 12px;
+    }
+    .row { display: flex; gap: 8px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+    button {
+      padding: 6px 14px; border: 1px solid #1f77bb; border-radius: 6px;
+      background: #1f77bb; color: #fff; cursor: pointer; font-size: 13px;
+    }
+    button.secondary { background: #fff; color: #1f77bb; }
+    button:disabled { opacity: .5; cursor: default; }
+    input[type=text], input[type=number] {
+      padding: 5px 8px; border: 1px solid #ccc; border-radius: 5px; font-size: 13px; width: 90px;
+    }
+    #statusDot {
+      display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+      background: #bbb; margin-right: 6px; vertical-align: middle;
+    }
+    #statusDot.connected { background: #2da44e; }
+    #statusDot.connecting { background: #d4a72c; }
+    #qrBox { text-align: center; margin-top: 8px; }
+    #qrBox img { border: 1px solid #e1e4e8; border-radius: 6px; }
+    #qrUrl { font-size: 11px; color: #666; word-break: break-all; margin-top: 4px; }
+    .tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+    .tabs button {
+      flex: 1; background: #fff; color: #444; border: 1px solid #d0d7de;
+    }
+    .tabs button.active { background: #1f77bb; color: #fff; border-color: #1f77bb; }
+    .fieldRow { display: flex; gap: 6px; margin-bottom: 6px; align-items: center; }
+    .fieldRow input { width: auto; flex: 1; }
+    .fieldRow input.col { flex: 0 0 50px; text-align: center; }
+    .fieldRow a { color: #c0392b; text-decoration: none; padding: 0 4px; }
+    #log {
+      max-height: 160px; overflow-y: auto; font-size: 12px;
+      font-family: Consolas, monospace; background: #fbfbfc;
+      border: 1px solid #eee; border-radius: 5px; padding: 6px;
+    }
+    #log div { border-bottom: 1px solid #f0f0f0; padding: 2px 0; }
+    .hint { color: #777; font-size: 12px; margin: 4px 0 0; }
+    .count { font-weight: bold; color: #1f77bb; }
+  </style>
+</head>
+<body>
+  <h2>📱 Scan-Relay 扫码录入</h2>
+
+  <!-- 配对卡片 -->
+  <div class="card" id="pairCard">
+    <div><span id="statusDot"></span><span id="statusText">未连接</span>
+      <span id="phoneCount" style="float:right"></span></div>
+    <div class="row">
+      <button id="btnPair">生成配对码</button>
+      <button id="btnDisconnect" class="secondary" disabled>断开</button>
+    </div>
+    <div id="qrBox" hidden>
+      <img id="qrImg" alt="配对二维码" width="180" height="180"/>
+      <div id="qrUrl"></div>
+      <p class="hint">用手机 App 扫描此码完成配对（手机与电脑需在同一局域网）</p>
+    </div>
+    <p class="hint" id="serverHint"></p>
+  </div>
+
+  <!-- 模式切换 -->
+  <div class="card">
+    <div class="tabs">
+      <button id="tabStream" class="active">连续扫码</button>
+      <button id="tabForm">表单采集</button>
+    </div>
+
+    <!-- 连续扫码模式 -->
+    <div id="paneStream">
+      <div class="row">
+        <button id="btnLocate" class="secondary">手动取点(备用)</button>
+        <span id="streamPos" class="hint">点击表格单元格自动定位</span>
+      </div>
+      <div class="row">
+        <label>重复保护(毫秒)</label>
+        <input type="number" id="dedupeMs" value="1000" min="0" step="100"/>
+        <span class="count" id="scanCount">已写入 0 行</span>
+      </div>
+      <p class="hint">自动跟踪：鼠标点哪个单元格，扫码就从那一行开始逐行写入；重新点选会切换起点并重置计数。</p>
+    </div>
+
+    <!-- 表单采集模式 -->
+    <div id="paneForm" hidden>
+      <div id="fieldList"></div>
+      <div class="row">
+        <button id="btnAddField" class="secondary">+ 添加字段</button>
+        <button id="btnSendConfig">下发配置到手机</button>
+      </div>
+      <div class="row">
+        <button id="btnFormLocate" class="secondary">手动取行(备用)</button>
+        <span id="formPos" class="hint">点击表格单元格自动定位行</span>
+      </div>
+      <p class="hint">按字段顺序整行写入对应列，写入行自动跟随鼠标选中的行；配置下发后手机端自动切换为表单模式。</p>
+    </div>
+  </div>
+
+  <!-- 日志 -->
+  <div class="card">
+    <h2>事件日志</h2>
+    <div id="log"></div>
+    <div class="row"><button id="btnClearLog" class="secondary">清空日志</button></div>
+  </div>
+
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+</body>
+</html>
