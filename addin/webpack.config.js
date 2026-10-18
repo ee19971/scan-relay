@@ -1,6 +1,6 @@
 /* webpack 配置：任务窗格 + 本地开发服务器。
- * - https://localhost:3000（office-addin-dev-certs 受信证书）
- * - /relay/* 反向代理到本地中转服务 http://127.0.0.1:8765（含 WebSocket 升级），
+ * - https://localhost:4443（office-addin-dev-certs 受信证书；与 manifest 保持一致）
+ * - /relay/* 与 /healthz 反向代理到本地中转服务 http://127.0.0.1:8765（含 WebSocket 升级），
  *   规避 Office 加载项 HTTPS 页面无法直连 ws://局域网IP 的 mixed-content 限制。
  */
 const HtmlWebpackPlugin = require("html-webpack-plugin");
@@ -24,13 +24,13 @@ module.exports = async () => {
       }),
     ],
     devServer: {
-      port: 3000,
+      port: 4443,
       server: { type: "https", options: httpsOptions },
       headers: { "Access-Control-Allow-Origin": "*" },
       hot: true,
       proxy: [
         {
-          context: ["/relay"],
+          context: ["/relay", "/healthz"],
           target: "http://127.0.0.1:8765",
           ws: true,
           pathRewrite: { "^/relay": "" },

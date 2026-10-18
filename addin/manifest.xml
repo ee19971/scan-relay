@@ -7,31 +7,35 @@
   xsi:type="TaskPaneApp">
 
   <Id>e6240025-8290-41d0-9956-d70e3d151aec</Id>
-  <Version>1.0.0</Version>
+  <Version>1.1.0</Version>
   <ProviderName>ScanRelay</ProviderName>
   <DefaultLocale>zh-CN</DefaultLocale>
   <DisplayName DefaultValue="Scan-Relay 扫码录入"/>
-  <Description DefaultValue="手机扫码，实时写入 Excel（配对式远程数据采集）"/>
-  <IconUrl DefaultValue="https://localhost:3000/assets/icon-32.png"/>
-  <HighResolutionIconUrl DefaultValue="https://localhost:3000/assets/icon-80.png"/>
-  <SupportUrl DefaultValue="https://localhost:3000/"/>
+  <Description DefaultValue="手机扫码，实时写入 Excel / Word / PowerPoint（配对式远程数据采集）"/>
+  <IconUrl DefaultValue="https://localhost:4443/assets/icon-32.png"/>
+  <HighResolutionIconUrl DefaultValue="https://localhost:4443/assets/icon-80.png"/>
+  <SupportUrl DefaultValue="https://localhost:4443/"/>
 
   <AppDomains>
-    <AppDomain>https://localhost:3000</AppDomain>
+    <AppDomain>https://localhost:4443</AppDomain>
   </AppDomains>
 
   <Hosts>
     <Host Name="Workbook"/>
+    <Host Name="Document"/>
+    <Host Name="Presentation"/>
   </Hosts>
 
+  <!-- 通用准入门槛（不能声明 ExcelApi，否则 Word/PPT 不显示按钮）；
+       实际可用 API 由运行时宿主决定，写入能力在 taskpane.js 里按宿主分流 -->
   <Requirements>
     <Sets DefaultMinVersion="1.1">
-      <Set Name="ExcelApi" MinVersion="1.9"/>
+      <Set Name="Office" MinVersion="1.1"/>
     </Sets>
   </Requirements>
 
   <DefaultSettings>
-    <SourceLocation DefaultValue="https://localhost:3000/taskpane.html"/>
+    <SourceLocation DefaultValue="https://localhost:4443/taskpane.html"/>
   </DefaultSettings>
 
   <Permissions>ReadWriteDocument</Permissions>
@@ -75,17 +79,91 @@
           </ExtensionPoint>
         </DesktopFormFactor>
       </Host>
+      <Host xsi:type="Document">
+        <DesktopFormFactor>
+          <GetStarted>
+            <Title resid="GetStarted.Title"/>
+            <Description resid="GetStarted.Description"/>
+            <LearnMoreUrl resid="GetStarted.LearnMoreUrl"/>
+          </GetStarted>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="ScanRelay.Group">
+                <Label resid="Group.Label"/>
+                <Icon>
+                  <bt:Image size="16" resid="Icon.16"/>
+                  <bt:Image size="32" resid="Icon.32"/>
+                  <bt:Image size="80" resid="Icon.80"/>
+                </Icon>
+                <Control xsi:type="Button" id="ScanRelay.Open">
+                  <Label resid="Open.Label"/>
+                  <Supertip>
+                    <Title resid="Open.Label"/>
+                    <Description resid="Open.Tip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16"/>
+                    <bt:Image size="32" resid="Icon.32"/>
+                    <bt:Image size="80" resid="Icon.80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>ScanRelay.Pane</TaskpaneId>
+                    <SourceLocation resid="Taskpane.Url"/>
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+      <Host xsi:type="Presentation">
+        <DesktopFormFactor>
+          <GetStarted>
+            <Title resid="GetStarted.Title"/>
+            <Description resid="GetStarted.Description"/>
+            <LearnMoreUrl resid="GetStarted.LearnMoreUrl"/>
+          </GetStarted>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="ScanRelay.Group">
+                <Label resid="Group.Label"/>
+                <Icon>
+                  <bt:Image size="16" resid="Icon.16"/>
+                  <bt:Image size="32" resid="Icon.32"/>
+                  <bt:Image size="80" resid="Icon.80"/>
+                </Icon>
+                <Control xsi:type="Button" id="ScanRelay.Open">
+                  <Label resid="Open.Label"/>
+                  <Supertip>
+                    <Title resid="Open.Label"/>
+                    <Description resid="Open.Tip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16"/>
+                    <bt:Image size="32" resid="Icon.32"/>
+                    <bt:Image size="80" resid="Icon.80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>ScanRelay.Pane</TaskpaneId>
+                    <SourceLocation resid="Taskpane.Url"/>
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
     </Hosts>
 
     <Resources>
       <bt:Images>
-        <bt:Image id="Icon.16" DefaultValue="https://localhost:3000/assets/icon-16.png"/>
-        <bt:Image id="Icon.32" DefaultValue="https://localhost:3000/assets/icon-32.png"/>
-        <bt:Image id="Icon.80" DefaultValue="https://localhost:3000/assets/icon-80.png"/>
+        <bt:Image id="Icon.16" DefaultValue="https://localhost:4443/assets/icon-16.png"/>
+        <bt:Image id="Icon.32" DefaultValue="https://localhost:4443/assets/icon-32.png"/>
+        <bt:Image id="Icon.80" DefaultValue="https://localhost:4443/assets/icon-80.png"/>
       </bt:Images>
       <bt:Urls>
-        <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:3000/taskpane.html"/>
-        <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://localhost:3000/"/>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:4443/taskpane.html"/>
+        <bt:Url id="GetStarted.LearnMoreUrl" DefaultValue="https://localhost:4443/"/>
       </bt:Urls>
       <bt:ShortStrings>
         <bt:String id="Group.Label" DefaultValue="Scan-Relay"/>

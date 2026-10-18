@@ -3,7 +3,7 @@
 一键启动（推荐）:
     python relay.py
     - http://<局域网IP>:8765  手机接入（WebSocket + 浏览器扫码页）
-    - https://localhost:3000  Excel 加载项页面（manifest 的 SourceLocation）
+    - https://localhost:4443  Excel 加载项页面（manifest 的 SourceLocation）
 
 开发模式（只起 API，前端用 webpack-dev-server）:
     uvicorn relay:app --host 0.0.0.0 --port 8765
@@ -32,7 +32,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("relay")
 
 PORT = int(os.environ.get("RELAY_PORT", "8765"))
-UI_PORT = int(os.environ.get("RELAY_UI_PORT", "3000"))
+UI_PORT = int(os.environ.get("RELAY_UI_PORT", "4443"))  # 默认 4443：3000 等常落入 Hyper-V/WinNAT 动态保留段导致 bind 10013
 ADDIN_DIST = Path(__file__).resolve().parent.parent / "addin" / "dist"
 
 app = FastAPI(title="Scan-Relay")
@@ -156,6 +156,12 @@ async def version() -> JSONResponse:
     return JSONResponse({"service": "scan-relay", "mode": "dev-api"})
 
 
+@app.get("/healthz")
+async def healthz() -> JSONResponse:
+    """健康检查（供加载项探测服务是否在运行）。"""
+    return JSONResponse({"ok": True})
+
+
 # ---------------------------------------------------------------- 加载项页面托管（一键启动模式）
 
 def create_ui_app() -> FastAPI:
@@ -170,6 +176,11 @@ def create_ui_app() -> FastAPI:
     @ui.get("/relay/version")
     async def relay_version() -> JSONResponse:
         return await version()
+
+    @ui.get("/healthz")
+    async def ui_healthz() -> JSONResponse:
+        # 必须在静态挂载之前注册，否则会被 StaticFiles 拦截
+        return JSONResponse({"ok": True})
 
     @ui.websocket("/relay/ws")
     async def relay_ws(ws: WebSocket, token: str = Query(...), role: str = Query(...)) -> None:
@@ -267,7 +278,7 @@ def _port_busy(port: int) -> bool:
 
 
 def main() -> None:
-    """一键启动：手机接入 API(8765) + 加载项页面 HTTPS(3000)。"""
+    """一键启动：手机接入 API(8765) + 加载项页面 HTTPS(4443)。"""
     import uvicorn
 
     if not ADDIN_DIST.is_dir():
@@ -277,7 +288,10 @@ def main() -> None:
     if busy:
         log.error(
             "端口 %s 已被占用。若之前开着 npm start 开发服务器，请先关闭它；"
-            "若中转服务已在运行则无需重复启动。", busy,
+            "若中转服务已在运行则无需重复启动。"
+            "（若 netstat 看不到占用者，可能是 Hyper-V/WinNAT 动态保留段，"
+            "用 netsh int ipv4 show excludedportrange protocol=tcp 查看；重启可换段，"
+            "或改用 RELAY_UI_PORT=<其它端口> 启动并同步更新 manifest）", busy,
         )
         return
 

@@ -1,14 +1,14 @@
-# Scan-Relay — Real-time phone-to-Excel barcode capture (Scan-IT to Office alternative)
+# Scan-Relay — Real-time phone-to-Office barcode capture (Scan-IT to Office alternative)
 
-Phone camera scanning / form capture → LAN relay service → Excel add-in writes cells in real time.
+Phone camera scanning / form capture → LAN relay service → Office add-in writes into **Excel / Word / PowerPoint** in real time.
 
 ```
-┌─────────────┐   ws://<LAN-IP>:8765   ┌──────────────────┐   wss://localhost:3000/relay   ┌─────────────────┐
+┌─────────────┐   ws://<LAN-IP>:8765   ┌──────────────────┐   wss://localhost:4443/relay   ┌─────────────────┐
 │ Phone app    │ ────────────────────► │ Python relay      │ ◄──────────────────────────── │ Office JS        │
-│ (Flutter)    │   scan / form data    │ (FastAPI + WS)    │  (webpack-dev-server proxy)   │ add-in (Excel)   │
+│ (Flutter)    │   scan / form data    │ (FastAPI + WS)    │  (page hosted by the relay)   │ add-in (3 hosts) │
 └─────────────┘                        └──────────────────┘                    └────────┬────────┘
-      ▲ scan QR / type pairing URL           │ auto-detect LAN IP                        │ Excel.run()
-      └──────────────────────────────────────┴─────────────────────────────────────► worksheet
+      ▲ scan QR / type pairing URL           │ auto-detect LAN IP                        │ per-host writes
+      └──────────────────────────────────────┴─────────────────────────────────────► cells / cursor / text box
 ```
 
 ## Contents
@@ -25,12 +25,16 @@ Phone camera scanning / form capture → LAN relay service → Excel add-in writ
 ### One-click launch (recommended)
 
 ```
-Double-click 启动Scan-Relay.bat
+Double-click 启动Scan-Relay.bat (console) or the "Scan-Relay 服务" shortcut (Desktop / Start Menu, minimized)
 ```
 
-One process serves both the phone relay (8765) and the add-in page (https://localhost:3000). Minimize the window; closing it stops the service.
+One process serves both the phone relay (8765) and the add-in page (https://localhost:4443). Closing the window stops the service.
 
-Then: open Excel → "Scan to Sheet" → generate pairing code → scan with phone.
+Then: open Excel/Word/PowerPoint → "Scan to Sheet" → generate pairing code → scan with phone.
+
+> **If the service stops**: the task pane's server status card probes every 3 s and shows a **Start server** button. It triggers the `scanrelay://` protocol which launches `launcher.vbs` in the background (Windows asks a one-time "open app?" confirmation); the pane auto-reconnects once the service is back.
+>
+> Port note: the add-in page uses **4443**, not the usual 3000 — low ports like 3000 are often swallowed by Hyper-V/WinNAT dynamic reservations (`netsh int ipv4 show excludedportrange protocol=tcp`), which looks like "port busy but nothing in netstat" (bind fails with WinError 10013). To change it: set `RELAY_UI_PORT` and update every URL in `addin/manifest.xml`, then re-run `sideload.ps1`.
 
 ### Manual launch (development)
 
@@ -50,19 +54,28 @@ python -m uvicorn relay:app --host 0.0.0.0 --port 8765
 ```powershell
 cd addin
 npm install
-npm start        # https://localhost:3000, installs a trusted dev certificate on first run
+npm start        # https://localhost:4443, installs a trusted dev certificate on first run
 ```
 
 After frontend changes run `npm run build` so the one-click mode serves the new UI.
 
-### 3. Sideload the add-in into Excel
+### 3. Sideload the add-in into Office (Excel / Word / PowerPoint)
 
-1. Open desktop Excel
+1. Open desktop Excel / Word / PowerPoint
 2. **Insert → Add-ins → My Add-ins → Upload My Add-in**, pick `addin/manifest.xml`
+   (or just run `sideload.ps1`: copies the manifest to the shared folder, writes the Trusted Catalogs registry key, registers the `scanrelay://` protocol and creates shortcuts — no admin rights needed)
 3. A **Scan-Relay** button appears on the Home tab; click it to open the task pane
 4. Click **Generate pairing code** — a QR code and connection status appear
 
 > Personal sideloading needs no AppSource review.
+
+### Per-host write behavior
+
+| Host | Continuous scan | Form capture |
+|---|---|---|
+| **Excel** | Tracks the selected cell (click where you want it), appends rows | Writes whole rows by column, row follows selection |
+| **Word** | Inserts at the cursor, one paragraph per scan | Inserts "field: value" lines at the cursor |
+| **PowerPoint** | Appends to the "ScanRelay.Text" text box on the current slide (created automatically if missing) | Appends "field: value" lines to the current slide's text box |
 
 ### 4. Pair the phone
 
@@ -150,12 +163,15 @@ Browser debug entry: `http://<LAN-IP>:8765/scan?token=<token>` (built-in jsQR sc
 - [x] Add-in webpack build + `/relay` reverse proxy (incl. WebSocket)
 - [x] Android emulator end-to-end: `scan` and `form_submit` messages both reach the add-in
 - [x] Real phone + Excel (M365) sideload, QR pairing and scan pipeline all working
+- [x] Multi-host manifest (Workbook/Document/Presentation + generic Office 1.1 requirement set)
+- [x] launcher.vbs cold start: `scanrelay://` protocol launch → both healthz endpoints up (avoids the Hyper-V-reserved 3000/3443)
 
 ## FAQ
 
 - **Phone cannot connect**: allow 8765 in the firewall; phone and PC must be on the same LAN (guest networks are usually isolated); `curl http://<IP>:8765/` opening in the phone browser means it works
-- **Add-in cannot connect**: start the relay (8765) first, then `npm start` (3000)
-- **Why the add-in does not connect to ws://LAN-IP directly**: Office add-in pages force HTTPS; a direct ws:// is blocked as mixed content, so traffic is proxied through `wss://localhost:3000/relay` (see `addin/webpack.config.js`)
+- **Add-in cannot connect**: start the relay first (status card in the pane / shortcut / 启动Scan-Relay.bat — any one)
+- **"Port busy" but nothing in netstat**: Hyper-V/WinNAT dynamic port reservations swallowed the port (bind fails with WinError 10013); check with `netsh int ipv4 show excludedportrange protocol=tcp`. Defaults avoid this (8765/4443); if a custom port collides, pick another or reboot (reservations are re-assigned each boot)
+- **Why the add-in does not connect to ws://LAN-IP directly**: Office add-in pages force HTTPS; a direct ws:// is blocked as mixed content, so traffic is proxied through `wss://localhost:4443/relay` (see the `/relay/*` routes in `server/relay.py`)
 - **Excel sideload gotchas** (from real debugging):
   - `manifest.xml` `<Version>` must be ≥ 1.0, otherwise Excel rejects it
   - Registry sideloading uses the current official format: `HKCU\Software\Microsoft\Office\16.0\Wef\TrustedCatalogs\{GUID}` with values `Id` (braced GUID), `Url` (**points at a shared folder, not the manifest file**, UNC with double backslashes), `Flags`=dword:1; restart Excel completely afterwards

@@ -52,10 +52,23 @@
     #log div { border-bottom: 1px solid #f0f0f0; padding: 2px 0; }
     .hint { color: #777; font-size: 12px; margin: 4px 0 0; }
     .count { font-weight: bold; color: #1f77bb; }
+    #serverCard { border-color: #e8c07a; background: #fffdf5; }
+    #serverCard .srvTitle { font-weight: bold; color: #9a6b00; }
+    #btnStartServer { font-size: 14px; padding: 8px 18px; }
   </style>
 </head>
 <body>
   <h2>📱 Scan-Relay 扫码录入</h2>
+
+  <!-- 服务器状态卡（服务停止时显示一键启动按钮） -->
+  <div class="card" id="serverCard" hidden>
+    <span class="srvTitle">⚠ 中转服务未运行</span>
+    <p class="hint">服务停止时窗格无法连接手机。点击下方按钮可一键启动（系统会弹出一次「是否打开 launcher」确认）。</p>
+    <div class="row">
+      <button id="btnStartServer">🚀 一键启动服务器</button>
+      <span id="startHint" class="hint" hidden></span>
+    </div>
+  </div>
 
   <!-- 配对卡片 -->
   <div class="card" id="pairCard">
@@ -82,7 +95,7 @@
 
     <!-- 连续扫码模式 -->
     <div id="paneStream">
-      <div class="row">
+      <div class="row" id="streamLocateRow">
         <button id="btnLocate" class="secondary">手动取点(备用)</button>
         <span id="streamPos" class="hint">点击表格单元格自动定位</span>
       </div>
@@ -91,7 +104,7 @@
         <input type="number" id="dedupeMs" value="1000" min="0" step="100"/>
         <span class="count" id="scanCount">已写入 0 行</span>
       </div>
-      <p class="hint">自动跟踪：鼠标点哪个单元格，扫码就从那一行开始逐行写入；重新点选会切换起点并重置计数。</p>
+      <p class="hint" id="streamHint">自动跟踪：鼠标点哪个单元格，扫码就从那一行开始逐行写入；重新点选会切换起点并重置计数。</p>
     </div>
 
     <!-- 表单采集模式 -->
@@ -101,11 +114,11 @@
         <button id="btnAddField" class="secondary">+ 添加字段</button>
         <button id="btnSendConfig">下发配置到手机</button>
       </div>
-      <div class="row">
+      <div class="row" id="formLocateRow">
         <button id="btnFormLocate" class="secondary">手动取行(备用)</button>
         <span id="formPos" class="hint">点击表格单元格自动定位行</span>
       </div>
-      <p class="hint">按字段顺序整行写入对应列，写入行自动跟随鼠标选中的行；配置下发后手机端自动切换为表单模式。</p>
+      <p class="hint" id="formHint">按字段顺序整行写入对应列，写入行自动跟随鼠标选中的行；配置下发后手机端自动切换为表单模式。</p>
     </div>
   </div>
 

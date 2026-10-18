@@ -1,17 +1,19 @@
 /* Scan-Relay 任务窗格逻辑
- * 配对 -> WebSocket 连接中转服务 -> 收到扫码/表单数据后写入 Excel。
+ * 配对 -> WebSocket 连接中转服务 -> 收到扫码/表单数据后按宿主写入（Excel/Word/PowerPoint）。
  * 连接路径: 页面(https://localhost:3000) -> /relay/* 反向代理 -> 本地中转服务(8765)
  */
-/* global Office, Excel */
+/* global Office, Excel, Word, PowerPoint */
 import QRCode from "qrcode";
 
 const RELAY_PAIR_URL = "/relay/pair";
+const PPT_TEXTBOX_NAME = "ScanRelay.Text"; // PPT 追加目标文本框的标记名
 
 // ---------------------------------------------------------------- 状态
 const state = {
   ws: null,
   token: null,
   sawPhone: false,
+  hostKind: "other", // excel | word | powerpoint | other
   mode: "stream", // stream | form
   stream: { sheetName: null, row: null, col: null, count: 0, lastValue: "", lastTime: 0 },
   form: { sheetName: null, row: null, fields: [] }, // fields: [{name, col(数字索引)}]
@@ -96,6 +98,57 @@ async function writeRow(sheetName, rowIndex, pairs) {
     }
     await context.sync();
   });
+}
+
+// ---------------------------------------------------------------- Word 写入（光标处逐行插入）
+async function writeWordLines(lines) {
+  // lines: string[] —— 一次调用整体插到当前光标后，每条占一段；光标跟随到末尾
+  return Word.run(async (context) => {
+    const range = context.document.getSelection();
+    const text = lines.map(String).join("\r") + "\r";
+    // "End" = 插到选区之后；返回值覆盖新插入的内容，用它把光标带到末尾
+    const inserted = range.insertText(text, Word.InsertLocation.end);
+    inserted.select(Word.SelectionRange.end);
+    await context.sync();
+  });
+}
+
+// ---------------------------------------------------------------- PowerPoint 写入（当前页文本框追加）
+async function writePptLines(lines) {
+  // lines: string[] —— 追加到当前幻灯片一个专用文本框（不存在则创建）
+  return PowerPoint.run(async (context) => {
+    const slide = context.presentation.getSelectedSlide();
+    const shapes = slide.shapes;
+    shapes.load("items");
+    await context.sync();
+
+    let box = shapes.items.find((s) => s.name === PPT_TEXTBOX_NAME);
+    if (!box) {
+      box = slide.shapes.addTextBox("", 40, 120, 560, 300);
+      box.name = PPT_TEXTBOX_NAME;
+    }
+    const textRange = box.textFrame.textRange;
+    textRange.load("text");
+    await context.sync();
+
+    const prefix = textRange.text ? textRange.text.replace(/\n$/, "") + "\n" : "";
+    textRange.text = prefix + lines.map((l) => String(l)).join("\n");
+    await context.sync();
+  });
+}
+
+// ---------------------------------------------------------------- 统一写入口（按宿主分流）
+async function writeLines(lines) {
+  if (state.hostKind === "word") {
+    await writeWordLines(lines);
+  } else if (state.hostKind === "powerpoint") {
+    await writePptLines(lines);
+  } else if (state.hostKind === "excel") {
+    // Excel 走原有单元格逻辑，这里不处理
+    throw new Error("Excel 请使用单元格写入路径");
+  } else {
+    throw new Error("当前 Office 组件不支持写入");
+  }
 }
 
 // ---------------------------------------------------------------- 选中单元格自动跟踪（轮询活动单元格）
@@ -238,8 +291,12 @@ function sendMessage(obj) {
 async function onScan(value) {
   if (state.mode !== "stream") return;
   const s = state.stream;
-  if (s.sheetName === null) {
+  if (state.hostKind === "excel" && s.sheetName === null) {
     log("⚠ 未定位起点，请在表格中点选一个单元格");
+    return;
+  }
+  if (state.hostKind === "other") {
+    log("⚠ 当前 Office 组件不支持写入（仅 Excel/Word/PowerPoint）");
     return;
   }
   // 重复保护
@@ -252,7 +309,11 @@ async function onScan(value) {
   s.lastValue = value;
   s.lastTime = now;
   try {
-    await writeCell(s.sheetName, s.row + s.count, s.col, value);
+    if (state.hostKind === "excel") {
+      await writeCell(s.sheetName, s.row + s.count, s.col, value);
+    } else {
+      await writeLines([value]);
+    }
     s.count += 1;
     $("scanCount").textContent = `已写入 ${s.count} 行`;
   } catch (e) {
@@ -262,21 +323,31 @@ async function onScan(value) {
 
 async function onFormSubmit(fields) {
   const f = state.form;
-  if (f.sheetName === null) {
+  if (state.hostKind === "other") {
+    log("⚠ 当前 Office 组件不支持写入（仅 Excel/Word/PowerPoint）");
+    return;
+  }
+  if (state.hostKind === "excel" && f.sheetName === null) {
     log("⚠ 未定位起点，请在表格中点选一个单元格");
     return;
   }
   const pairs = f.fields
     .filter((x) => fields[x.name] !== undefined)
-    .map((x) => ({ col: x.col, value: fields[x.name] }));
+    .map((x) => ({ col: x.col, name: x.name, value: fields[x.name] }));
   if (pairs.length === 0) {
     log("⚠ 提交的字段与配置不匹配");
     return;
   }
   try {
-    await writeRow(f.sheetName, f.row, pairs);
-    f.row += 1;
-    $("formPos").textContent = `${f.sheetName} 第 ${f.row} 行`;
+    if (state.hostKind === "excel") {
+      await writeRow(f.sheetName, f.row, pairs);
+      f.row += 1;
+      $("formPos").textContent = `${f.sheetName} 第 ${f.row} 行`;
+    } else {
+      // Word/PPT：字段顺序即插入顺序，格式「字段名: 值」
+      await writeLines(pairs.map((p) => `${p.name}: ${p.value}`));
+      log(`表单已写入（${pairs.length} 个字段）`);
+    }
   } catch (e) {
     log("⚠ 写入失败: " + e.message);
   }
@@ -391,40 +462,152 @@ function switchTab(mode) {
 
 let _initialized = false;
 
+function detectHostKind(info) {
+  try {
+    const h = info && info.host;
+    if (typeof Office !== "undefined" && Office.HostType) {
+      if (h === Office.HostType.Excel) return "excel";
+      if (h === Office.HostType.Word) return "word";
+      if (h === Office.HostType.PowerPoint) return "powerpoint";
+    }
+  } catch (e) { /* ignore */ }
+  return "other";
+}
+
+const HOST_LABELS = { excel: "Excel", word: "Word", powerpoint: "PowerPoint" };
+
 function initTaskpane() {
   if (_initialized) return;
   _initialized = true;
   bindEvents();
   renderFields();
   $("serverHint").textContent = `中转服务地址: ${location.origin}/relay（需先启动中转服务）`;
-  log("加载项就绪");
+
+  const label = HOST_LABELS[state.hostKind];
+  if (label) {
+    log(`加载项就绪（${label} 模式）`);
+    adaptUiForHost();
+    if (state.hostKind === "excel") startAutoTracking();
+    else log(state.hostKind === "word"
+      ? "扫码内容将插入到光标处（每条一段）"
+      : "扫码内容将追加到当前页文本框（没有会自动创建）");
+  } else {
+    log("⚠ 当前 Office 组件不受支持（仅 Excel/Word/PowerPoint），配对可用但无法写入");
+  }
   restoreToken();
-  startAutoTracking();
+  startServerWatch();
+}
+
+function adaptUiForHost() {
+  if (state.hostKind === "excel") return; // Excel 保持原样
+  // Word/PPT：隐藏单元格定位相关 UI，改为宿主说明
+  $("streamLocateRow").hidden = true;
+  $("formLocateRow").hidden = true;
+  $("streamHint").textContent = state.hostKind === "word"
+    ? "扫码内容插入到光标处，每条数据占一段；请先在文档中点好光标位置。"
+    : "扫码内容追加到当前页的「ScanRelay.Text」文本框；换页后扫码会自动创建新文本框。";
+  $("formHint").textContent = "表单按「字段名: 值」逐条插入到光标处 / 当前页文本框。";
+  // Word/PPT 没有"列"的概念，隐藏列输入
+  document.querySelectorAll(".fieldRow input.col").forEach((el) => { el.style.display = "none"; });
+  document.querySelectorAll(".fieldRow a").forEach((el) => { /* 保留删除按钮 */ });
+}
+
+// ---------------------------------------------------------------- 服务器状态卡（探测 + 一键启动）
+const START_PROTOCOL = "scanrelay://start";
+
+async function probeServer() {
+  // 同源 /healthz，服务在但可能未配对也能探测到
+  try {
+    const res = await fetch("/healthz", { cache: "no-store" });
+    return res.ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+let _serverUp = true; // 页面能加载出来通常说明服务在跑
+
+function setServerCard(up) {
+  if (up === _serverUp) return;
+  _serverUp = up;
+  $("serverCard").hidden = up;
+  if (!up) {
+    setStatus("", "服务未运行");
+    log("⚠ 中转服务已停止（可用下方按钮一键启动）");
+  } else {
+    log("✓ 中转服务已恢复");
+  }
+}
+
+async function startServerWatch() {
+  // 每 3 秒探测一次；服务停止时显示一键启动卡
+  setInterval(async () => {
+    const up = await probeServer();
+    setServerCard(up);
+    // 服务恢复且之前连过 -> 自动重连
+    if (up && !state.ws && state.token) {
+      log("自动重新连接…");
+      connect(state.token);
+    }
+  }, 3000);
+}
+
+function bindStartButton() {
+  $("btnStartServer").onclick = () => {
+    const hint = $("startHint");
+    hint.hidden = false;
+    hint.textContent = "正在请求启动（若弹出确认框请点「打开」）…";
+    log("请求启动中转服务（scanrelay://）");
+    // 触发自定义协议唤起本地启动器（anchor 点击是 WebView2 支持最稳的方式，
+    // 系统会弹一次「是否打开 launcher.vbs」确认）
+    const a = document.createElement("a");
+    a.href = START_PROTOCOL;
+    a.style.display = "none";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => a.remove(), 30000);
+    // 轮询等待服务起来
+    let waited = 0;
+    const timer = setInterval(async () => {
+      waited += 1;
+      if (await probeServer()) {
+        clearInterval(timer);
+        hint.textContent = "";
+        hint.hidden = true;
+        setServerCard(true);
+      } else if (waited >= 20) { // 20 次 x 1.5 秒 = 30 秒超时
+        clearInterval(timer);
+        hint.textContent = "启动超时：请确认弹窗中点了「打开」，或手动运行 启动Scan-Relay.bat";
+      }
+    }, 1500);
+  };
 }
 
 async function restoreToken() {
   const saved = await storageGet("scanrelay_token");
   if (saved) {
     log("尝试恢复上次会话…");
+    state.token = saved;
     connect(saved);
   }
 }
 
 if (typeof Office !== "undefined" && typeof Office.onReady === "function") {
   Office.onReady(async (info) => {
-    if (info && info.host && info.host !== Office.HostType.Excel) {
-      log("⚠ 当前不是 Excel 宿主");
-    }
+    state.hostKind = detectHostKind(info);
     initTaskpane();
+    bindStartButton();
   });
   // 兜底：8 秒内 Office.js 没就绪（如 CDN 被拦截）也初始化——配对不依赖 Office API
   setTimeout(() => {
     if (!_initialized) {
-      log("⚠ Office.js 加载超时（CDN 可能被拦截），已进入降级模式：配对可用，写入 Excel 可能失败");
+      log("⚠ Office.js 加载超时（CDN 可能被拦截），已进入降级模式：配对可用，写入可能失败");
       initTaskpane();
+      bindStartButton();
     }
   }, 8000);
 } else {
-  log("⚠ 未检测到 Office 环境（office.js 未加载），已进入降级模式：配对可用，写入 Excel 可能失败");
+  log("⚠ 未检测到 Office 环境（office.js 未加载），已进入降级模式：配对可用，写入可能失败");
   initTaskpane();
+  bindStartButton();
 }

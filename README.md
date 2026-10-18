@@ -1,16 +1,16 @@
-# Scan-Relay —— 手机扫码实时写入 Excel（类 Scan-IT to Office）
+# Scan-Relay —— 手机扫码实时写入 Office（类 Scan-IT to Office）
 
-手机摄像头扫码 / 表单采集 → 局域网中转服务 → Excel 加载项实时写入单元格。
+手机摄像头扫码 / 表单采集 → 局域网中转服务 → Office 加载项实时写入 **Excel / Word / PowerPoint**。
 
 [English](README.en.md) · [GPL-3.0](LICENSE)
 
 ```
-┌─────────────┐   ws://局域网IP:8765   ┌──────────────────┐   wss://localhost:3000/relay   ┌─────────────────┐
+┌─────────────┐   ws://局域网IP:8765   ┌──────────────────┐   wss://localhost:4443/relay   ┌─────────────────┐
 │ 手机 App     │ ───────────────────► │  Python 中转服务  │ ◄────────────────────────────  │ Office JS 加载项 │
-│ (Flutter)   │   扫码/表单数据        │  (FastAPI+WS)    │   （webpack-dev-server 代理）   │ (Excel 任务窗格) │
+│ (Flutter)   │   扫码/表单数据        │  (FastAPI+WS)    │   （页面由中转服务直接托管）    │ (Excel/Word/PPT) │
 └─────────────┘                       └──────────────────┘                    └────────┬────────┘
-      ▲ 扫 QR / 手动输入配对地址              │ 自动探测局域网 IP                          │ Excel.run()
-      └──────────────────────────────────────┴─────────────────────────────────────► Excel 工作表
+      ▲ 扫 QR / 手动输入配对地址              │ 自动探测局域网 IP                          │ 按宿主分流写入
+      └──────────────────────────────────────┴─────────────────────────────────────► 单元格 / 光标处 / 文本框
 ```
 
 ## 目录
@@ -25,12 +25,16 @@
 ### 一键启动（推荐，日常使用）
 
 ```
-双击「启动Scan-Relay.bat」
+双击「启动Scan-Relay.bat」（看控制台） 或 桌面/开始菜单的「Scan-Relay 服务」快捷方式（后台最小化）
 ```
 
-一个进程同时提供：手机接入（8765）+ Excel 加载项页面托管（https://localhost:3000）。窗口保持最小化即可，关闭窗口即停止服务。首次运行若 3000 端口被占用，会提示先关闭 `npm start`。
+一个进程同时提供：手机接入（8765）+ 加载项页面托管（https://localhost:4443）。快捷方式启动的是最小化窗口，关闭窗口即停止服务。
 
-之后只需：打开 Excel →「扫码录入」→ 生成配对码 → 手机扫码。
+之后只需：打开 Excel/Word/PPT →「扫码录入」→ 生成配对码 → 手机扫码。
+
+> **服务挂了怎么办**：任务窗格里的「服务器状态卡」会自动探测（3 秒一次），停止时显示 **🚀 一键启动服务器** 按钮，点击即通过 `scanrelay://` 协议唤起 launcher.vbs 后台拉起服务（系统会弹一次「是否打开」确认），服务恢复后窗格自动重连。
+>
+> 端口说明：加载项页面默认端口是 **4443** 而非常见的 3000——3000 等低端口常被 Hyper-V/WinNAT 动态保留（`netsh int ipv4 show excludedportrange protocol=tcp` 可查看），表现为"端口被占用但 netstat 看不到占用者"（bind 报 WinError 10013）。如需改端口：设置 `RELAY_UI_PORT` 环境变量并同步修改 `addin/manifest.xml` 里的全部 URL，重新执行 `sideload.ps1`。
 
 ### 手动启动（开发模式）
 
@@ -50,19 +54,28 @@ python -m uvicorn relay:app --host 0.0.0.0 --port 8765
 ```powershell
 cd addin
 npm install
-npm start        # https://localhost:3000，首次会自动安装受信开发证书
+npm start        # https://localhost:4443，首次会自动安装受信开发证书
 ```
 
 改完前端代码后需 `npm run build` 重新构建，一键模式才会带上新界面。
 
-### 3. 在 Excel 中侧载加载项
+### 3. 在 Office 中侧载加载项（Excel / Word / PowerPoint 通用）
 
-1. 打开 Excel（桌面版）
+1. 打开 Excel / Word / PowerPoint（桌面版）
 2. **插入 → 加载项 → 我的加载项 → 上载我的加载项**，选择 `addin/manifest.xml`
+   （或直接运行 `sideload.ps1`：自动复制 manifest 到共享目录 + 写受信任目录注册表 + 注册 `scanrelay://` 协议 + 创建快捷方式，无需管理员权限）
 3. 首页「开始」选项卡会出现 **Scan-Relay → 扫码录入** 按钮，点击打开任务窗格
 4. 点 **生成配对码**，显示二维码和连接状态
 
 > 自用侧载无需 AppSource 审核。证书提示时选"是/安装"。
+
+### 各宿主写入行为
+
+| 宿主 | 连续扫码 | 表单采集 |
+|---|---|---|
+| **Excel** | 自动跟踪选中单元格（点哪写哪），逐行追加 | 按列写入整行，行号自动跟随选中行 |
+| **Word** | 插入到光标处，每条一段 | 按「字段名: 值」逐行插入到光标处 |
+| **PowerPoint** | 追加到当前页「ScanRelay.Text」文本框（没有会自动创建） | 按「字段名: 值」逐行追加到当前页文本框 |
 
 ### 4. 手机端配对
 
@@ -76,10 +89,10 @@ App 打开相机 → 扫 Excel 任务窗格里的二维码 → 状态变"已连�
 
 ### 两种采集模式
 
-| 模式 | Excel 端操作 | 手机端行为 |
+| 模式 | 桌面端行为 | 手机端行为 |
 |---|---|---|
-| 连续扫码 | 起点**自动跟踪选中单元格**（点哪写哪）→ 逐行追加，可设重复保护毫秒 | 对准条码自动逐条发送，支持手动输入/扫码枪 |
-| 表单采集 | 设计字段+列 → 选中起始行 →「下发配置到手机」 | 按配置渲染表单，填完「提交本行」整行写入 |
+| 连续扫码 | Excel：起点**自动跟踪选中单元格**（点哪写哪）逐行追加；Word/PPT：写到光标处/当前页文本框。均可设重复保护毫秒 | 对准条码自动逐条发送，支持手动输入/扫码枪 |
+| 表单采集 | 设计字段（Excel 可指定列）→「下发配置到手机」 | 按配置渲染表单，填完「提交本行」写入 |
 
 ## 连接方式决策树（没有路由器/没网卡怎么办）
 
@@ -149,12 +162,15 @@ python send_config.py <token>        # 下发表单配置并监听提交（联�
 - [x] 加载项 webpack 构建 + `/relay` 反向代理（含 WebSocket）
 - [x] Android 模拟器端到端：扫码模式 `scan` 消息、表单模式 `form_submit` 消息均到达加载项端
 - [x] 真机 Excel（M365 企业版）侧载成功，配对二维码 + 手机扫码链路跑通
+- [x] 多宿主 manifest（Workbook/Document/Presentation + Office 1.1 通用要求集）
+- [x] launcher.vbs 冷启动：`scanrelay://` 协议唤起 → 双端口 healthz 就绪（避开了 Hyper-V 保留段的 3000/3443）
 
 ## 常见问题
 
 - **手机连不上**：检查防火墙放行 8765；手机与电脑必须同一局域网（访客网络通常隔离）；`curl http://<IP>:8765/` 在手机浏览器能打开即通
-- **加载项连不上**：先启动中转服务（8765），再 `npm start`（3000）
-- **为什么加载项不直连 ws://局域网IP**：Office 加载项页面强制 HTTPS，直连 ws:// 会被 mixed-content 拦截；故经 `wss://localhost:3000/relay` 代理转发（见 `addin/webpack.config.js`）
+- **加载项连不上**：先启动中转服务（任务窗格状态卡/快捷方式/启动Scan-Relay.bat 任选其一）
+- **"端口被占用"但 netstat 看不到占用者**：多半是 Hyper-V/WinNAT 动态保留段吞了端口（bind 报 `WinError 10013`），`netsh int ipv4 show excludedportrange protocol=tcp` 可确认；默认端口已避开（8765/4443），若自定义端口中招则换端口或重启系统（保留段每次开机重新分配）
+- **为什么加载项不直连 ws://局域网IP**：Office 加载项页面强制 HTTPS，直连 ws:// 会被 mixed-content 拦截；故经 `wss://localhost:4443/relay` 代理转发（见 `server/relay.py` 的 `/relay/*` 路由）
 - **Excel 侧载的历史坑**（实测记录，供排查参考）：
   - `manifest.xml` 的 `<Version>` 必须 ≥ 1.0，否则 `office-addin-manifest validate` 报 "Manifest Version Too Low"，Excel 拒绝安装
   - 注册表侧载要用**当前官方格式**：`HKCU\Software\Microsoft\Office\16.0\Wef\TrustedCatalogs\{GUID}`，值为 `Id`（带花括号的 GUID）、`Url`（**指向共享文件夹而非 manifest 文件**，UNC 双反斜杠）、`Flags`=dword:1；写完需完全重启 Excel
