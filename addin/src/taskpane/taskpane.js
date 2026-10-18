@@ -189,8 +189,12 @@ async function writePptLines(lines) {
     textRange.load("text");
     await context.sync();
 
-    const prefix = textRange.text ? textRange.text.replace(/\n$/, "") + "\n" : "";
-    textRange.text = prefix + lines.map((l) => String(l)).join("\n");
+    // PowerPoint 的段落分隔符是 \r（官方示例里同时防御 \n/\r/\v 可证，
+    // \r 才是段落符、\v 是段内换行）。读回来先剥掉末尾的段落符再追加，
+    // 否则和 Word 一样每写一次就在末尾多出一个空段落。
+    const SEP = "\r";
+    const old = (textRange.text || "").replace(/\r+$/, "");
+    textRange.text = (old ? old + SEP : "") + lines.map(String).join(SEP);
     await context.sync();
 
     if (note) log("ℹ " + note); // 退回第一页时要说一声
