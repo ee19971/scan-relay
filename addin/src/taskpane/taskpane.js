@@ -16,6 +16,7 @@ const state = {
   hostKind: "other", // excel | word | powerpoint | other
   degraded: false,   // Office.js 未就绪（CDN 慢/被拦截）时的降级标记
   mode: "stream", // stream | form
+  pptBoxBySlide: {}, // PPT: slideId -> 复用的文本框 shape id（比按名字找可靠）
   stream: { sheetName: null, row: null, col: null, count: 0, lastValue: "", lastTime: 0 },
   form: { sheetName: null, row: null, fields: [] }, // fields: [{name, col(数字索引)}]
 };
@@ -167,24 +168,49 @@ async function writePptLines(lines) {
       note = "未能取得当前选中页，已写入第 1 页";
     }
 
+    // 需要 slide.id：既作为"这一页上次用的是哪个框"的记忆键，也让日志能说清写到了哪一页
+    slide.load("id");
+    await context.sync();
+    const slideId = slide.id;
+
     const shapes = slide.shapes;
     shapes.load("items");
     await context.sync();
 
+    // ---- 定位（或创建）这一页上的专用文本框 ----
     let box = null;
-    if (shapes.items.length > 0) {
-      // 显式加载 name：只 load("items") 时直接取 s.name 可能被 Office.js 拒绝
-      // （PropertyNotLoaded），那样每扫一次就会新建一个文本框而不是追加
-      shapes.items.forEach((s) => s.load("name"));
+    const seenNames = [];
+
+    // ① 优先按上次记下的 shape id 复用：id 是稳定标识，不依赖名字能否读到
+    const remembered = state.pptBoxBySlide[slideId];
+    if (remembered) {
+      const byId = shapes.getItemOrNullObject(remembered);
+      byId.load("id,name");
       await context.sync();
+      if (!byId.isNullObject) box = byId;
+    }
+
+    // ② 回退：按名字找（窗格重开、state 丢失时靠它）
+    if (!box && shapes.items.length > 0) {
+      // 必须显式 load name：只 load("items") 时读 s.name 会被 Office.js 拒绝，
+      // 那样每次都会走到"新建"分支
+      shapes.items.forEach((s) => s.load("name,id"));
+      await context.sync();
+      shapes.items.forEach((s) => seenNames.push(s.name || "(未命名)"));
       box = shapes.items.find((s) => s.name === PPT_TEXTBOX_NAME);
     }
+
     if (!box) {
       // 注意 addTextBox 的第二个参数是**对象** {left, top, width, height}，
       // 不是 VBA 那种位置参数；写成 addTextBox("", 40, 120, 560, 300) 会直接报错
       box = slide.shapes.addTextBox("", { left: 40, top: 120, width: 560, height: 300 });
       box.name = PPT_TEXTBOX_NAME;
+      box.load("id");
+      await context.sync(); // 建框 + 命名必须先落地，否则下一次仍复用不到
+      log(`新建文本框「${PPT_TEXTBOX_NAME}」(id=${box.id})，该页原有形状: ${seenNames.length ? seenNames.join(" / ") : "无"}`);
     }
+    state.pptBoxBySlide[slideId] = box.id;
+
     const textRange = box.textFrame.textRange;
     textRange.load("text");
     await context.sync();
