@@ -26,13 +26,10 @@
     <Host Name="Presentation"/>
   </Hosts>
 
-  <!-- 通用准入门槛（不能声明 ExcelApi，否则 Word/PPT 不显示按钮）；
-       实际可用 API 由运行时宿主决定，写入能力在 taskpane.js 里按宿主分流 -->
-  <Requirements>
-    <Sets DefaultMinVersion="1.1">
-      <Set Name="Office" MinVersion="1.1"/>
-    </Sets>
-  </Requirements>
+  <!-- 多宿主（Excel/Word/PPT）：整个省略 Requirements 元素。
+       原因：Sets 内的 Set 是 AND 语义——声明 ExcelApi 会让 Word/PPT 因不满足而整体排除；
+       而空 <Sets/> 又违反 XSD（schema 要求至少一个 Set）。Requirements 对任务窗格加载项可选，
+       省略后默认最低版本即可激活；实际可用 API 由运行时宿主决定，写入按宿主分流（taskpane.js）。 -->
 
   <DefaultSettings>
     <SourceLocation DefaultValue="https://localhost:4443/taskpane.html"/>
