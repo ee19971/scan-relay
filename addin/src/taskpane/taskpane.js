@@ -1,6 +1,6 @@
 /* Scan-Relay 任务窗格逻辑
  * 配对 -> WebSocket 连接中转服务 -> 收到扫码/表单数据后按宿主写入（Excel/Word/PowerPoint）。
- * 连接路径: 页面(https://localhost:3000) -> /relay/* 反向代理 -> 本地中转服务(8765)
+ * 连接路径: 页面(https://localhost:4443) -> /relay/* 反向代理 -> 本地中转服务(8765)
  */
 /* global Office, Excel, Word, PowerPoint */
 import QRCode from "qrcode";
@@ -14,6 +14,7 @@ const state = {
   token: null,
   sawPhone: false,
   hostKind: "other", // excel | word | powerpoint | other
+  degraded: false,   // Office.js 未就绪（CDN 慢/被拦截）时的降级标记
   mode: "stream", // stream | form
   stream: { sheetName: null, row: null, col: null, count: 0, lastValue: "", lastTime: 0 },
   form: { sheetName: null, row: null, fields: [] }, // fields: [{name, col(数字索引)}]
@@ -106,10 +107,22 @@ async function writeWordLines(lines) {
   return Word.run(async (context) => {
     const range = context.document.getSelection();
     const text = lines.map(String).join("\r") + "\r";
-    // "End" = 插到选区之后；返回值覆盖新插入的内容，用它把光标带到末尾
+    // "End" = 插到选区之后（Word.InsertLocation 是官方枚举，值 "End"）
     const inserted = range.insertText(text, Word.InsertLocation.end);
-    inserted.select(Word.SelectionRange.end);
+    // ① 先提交写入：Office.js 的操作是排队到 sync 才执行，任何异常只要发生在
+    //    sync 之前，整批都会被丢弃——所以必须把"写入"和"移动光标"拆成两步，
+    //    光标操作出问题绝不能连累已经写进去的数据。
     await context.sync();
+    try {
+      // ② 再把光标挪到新内容末尾，好让下一条继续往后追加。
+      //    枚举是 Word.SelectionMode（"Select"/"Start"/"End"），
+      //    Word.SelectionRange 根本不存在，用了会直接 TypeError。
+      inserted.select(Word.SelectionMode.end);
+      await context.sync();
+    } catch (e) {
+      // 光标没跟上：本次内容仍在，但下一条可能接在原地，提示用户重定位
+      log("⚠ 光标跟随失败（已写入内容不受影响）: " + e.message);
+    }
   });
 }
 
@@ -122,7 +135,14 @@ async function writePptLines(lines) {
     shapes.load("items");
     await context.sync();
 
-    let box = shapes.items.find((s) => s.name === PPT_TEXTBOX_NAME);
+    let box = null;
+    if (shapes.items.length > 0) {
+      // 显式加载 name：只 load("items") 时直接取 s.name 可能被 Office.js 拒绝
+      // （PropertyNotLoaded），那样每扫一次就会新建一个文本框而不是追加
+      shapes.items.forEach((s) => s.load("name"));
+      await context.sync();
+      box = shapes.items.find((s) => s.name === PPT_TEXTBOX_NAME);
+    }
     if (!box) {
       box = slide.shapes.addTextBox("", 40, 120, 560, 300);
       box.name = PPT_TEXTBOX_NAME;
@@ -179,7 +199,11 @@ async function pollActiveCell() {
   } catch (e) { /* 瞬时错误（如正在重算）忽略，下一轮重试 */ }
 }
 
+let _autoTracking = false; // startAutoTracking 只允许启动一次轮询
+
 async function startAutoTracking() {
+  if (_autoTracking) return; // 幂等：宿主适配可能被调用多次（晚到的 Office.onReady）
+  _autoTracking = true;
   try {
     const pos = await getActiveCellPos();
     applyAnchor(pos.sheetName, pos.row, pos.col, false);
@@ -397,6 +421,9 @@ function renderFields() {
     colInput.className = "col";
     colInput.title = "写入的列（A、B、C…）";
     colInput.value = colLetter(field.col);
+    // Word/PPT 没有"列"的概念，动态新增的字段同样不能露出列输入
+    // （adaptUiForHost 只能管到初始化那一刻已经存在的行）
+    if (state.hostKind !== "excel") colInput.style.display = "none";
     colInput.onchange = () => {
       const idx = letterToIndex(colInput.value);
       if (idx === null) { colInput.value = colLetter(field.col); return; }
@@ -423,8 +450,12 @@ function bindEvents() {
   $("tabStream").onclick = () => switchTab("stream");
   $("tabForm").onclick = () => switchTab("form");
 
-  // 连续扫码（手动备用取点）
+  // 连续扫码（手动备用取点）—— 仅 Excel 有意义（Word 跟随光标、PPT 跟随当前页）
   $("btnLocate").onclick = async () => {
+    if (state.hostKind !== "excel") {
+      log("⚠ 手动取点只在 Excel 中可用（Word 插在光标处 / PPT 插在当前页）");
+      return;
+    }
     try {
       const pos = await getActiveCellPos();
       applyAnchor(pos.sheetName, pos.row, pos.col, false);
@@ -444,6 +475,10 @@ function bindEvents() {
     log("表单配置已下发");
   };
   $("btnFormLocate").onclick = async () => {
+    if (state.hostKind !== "excel") {
+      log("⚠ 手动取点只在 Excel 中可用（Word 插在光标处 / PPT 插在当前页）");
+      return;
+    }
     try {
       const pos = await getActiveCellPos();
       applyAnchor(pos.sheetName, pos.row, pos.col, false);
@@ -461,6 +496,9 @@ function switchTab(mode) {
 }
 
 let _initialized = false;
+let _hostApplied = null;      // 上次按宿主适配时的 hostKind（用于 applyHostUi 幂等）
+let _serverWatchStarted = false;
+let _startButtonBound = false;
 
 function detectHostKind(info) {
   try {
@@ -482,9 +520,22 @@ function initTaskpane() {
   bindEvents();
   renderFields();
   $("serverHint").textContent = `中转服务地址: ${location.origin}/relay（需先启动中转服务）`;
+  applyHostUi();
+  restoreToken();
+  startServerWatch();
+}
+
+// 按宿主适配 UI —— 幂等：宿主没变就什么都不做。
+// 存在意义：Office.onReady 可能晚于 8 秒兜底超时才到达，那时 _initialized 已为
+// true、initTaskpane 直接返回，若不单独再调一次本函数，hostKind 虽被更新却
+// 既不会隐藏 Excel 专用控件、也不会启动 Excel 自动跟踪。
+function applyHostUi() {
+  if (_hostApplied === state.hostKind) return;
+  _hostApplied = state.hostKind;
 
   const label = HOST_LABELS[state.hostKind];
   if (label) {
+    state.degraded = false;
     log(`加载项就绪（${label} 模式）`);
     adaptUiForHost();
     if (state.hostKind === "excel") startAutoTracking();
@@ -492,24 +543,45 @@ function initTaskpane() {
       ? "扫码内容将插入到光标处（每条一段）"
       : "扫码内容将追加到当前页文本框（没有会自动创建）");
   } else {
-    log("⚠ 当前 Office 组件不受支持（仅 Excel/Word/PowerPoint），配对可用但无法写入");
+    adaptUiForHost(); // 降级/不支持：Excel 专用取点控件同样要藏起来
+    log(state.degraded
+      ? "⚠ Office.js 未就绪（CDN appsforoffice.microsoft.com 可能被拦截），已进入降级模式：可配对，无法写入。检查网络后重启 Office 即可恢复"
+      : "⚠ 当前 Office 组件不受支持（仅 Excel/Word/PowerPoint），配对可用但无法写入");
   }
-  restoreToken();
-  startServerWatch();
+}
+
+// 统一入口：初始化一次 + 按宿主适配（可重复）+ 绑定启动按钮（幂等）
+function startApp() {
+  initTaskpane();
+  applyHostUi();
+  bindStartButton();
 }
 
 function adaptUiForHost() {
-  if (state.hostKind === "excel") return; // Excel 保持原样
-  // Word/PPT：隐藏单元格定位相关 UI，改为宿主说明
-  $("streamLocateRow").hidden = true;
-  $("formLocateRow").hidden = true;
-  $("streamHint").textContent = state.hostKind === "word"
-    ? "扫码内容插入到光标处，每条数据占一段；请先在文档中点好光标位置。"
-    : "扫码内容追加到当前页的「ScanRelay.Text」文本框；换页后扫码会自动创建新文本框。";
-  $("formHint").textContent = "表单按「字段名: 值」逐条插入到光标处 / 当前页文本框。";
-  // Word/PPT 没有"列"的概念，隐藏列输入
+  if (state.hostKind === "excel") return; // Excel 保持原样（取点按钮、列输入都要留着）
+
+  // Word/PPT/降级：隐藏 Excel 专用的取点行。
+  // 关键：这两个元素带 class="row"（display:flex），作者样式会压过浏览器默认的
+  // [hidden]{display:none}，光设 .hidden=true 是**不生效**的（这正是 Word 里
+  // "手动取点"点出 Excel is not defined 的原因），必须配合 HTML 里的
+  // [hidden]{display:none!important} 才真正隐藏。
+  const hide = (id) => { const el = $(id); if (el) el.hidden = true; };
+  hide("streamLocateRow");
+  hide("formLocateRow");
+  // 字段行里动态创建的列输入也一并压掉
   document.querySelectorAll(".fieldRow input.col").forEach((el) => { el.style.display = "none"; });
-  document.querySelectorAll(".fieldRow a").forEach((el) => { /* 保留删除按钮 */ });
+
+  if (state.hostKind === "word") {
+    $("streamHint").textContent = "扫码内容插入到光标处，每条数据占一段；请先在文档中点好光标位置。";
+    $("formHint").textContent = "表单按「字段名: 值」逐条插入到光标处。";
+  } else if (state.hostKind === "powerpoint") {
+    $("streamHint").textContent = "扫码内容追加到当前页的「ScanRelay.Text」文本框；换页后扫码会自动创建新文本框。";
+    $("formHint").textContent = "表单按「字段名: 值」逐条追加到当前页的「ScanRelay.Text」文本框。";
+  } else {
+    // 降级（Office.js 未就绪）或不支持的宿主
+    $("streamHint").textContent = "当前环境无法写入（仅 Excel/Word/PowerPoint），配对仍可使用。";
+    $("formHint").textContent = "当前环境无法写入（仅 Excel/Word/PowerPoint），配对仍可使用。";
+  }
 }
 
 // ---------------------------------------------------------------- 服务器状态卡（探测 + 一键启动）
@@ -540,6 +612,8 @@ function setServerCard(up) {
 }
 
 async function startServerWatch() {
+  if (_serverWatchStarted) return;
+  _serverWatchStarted = true;
   // 每 3 秒探测一次；服务停止时显示一键启动卡
   setInterval(async () => {
     const up = await probeServer();
@@ -553,6 +627,8 @@ async function startServerWatch() {
 }
 
 function bindStartButton() {
+  if (_startButtonBound) return;
+  _startButtonBound = true;
   $("btnStartServer").onclick = () => {
     const hint = $("startHint");
     hint.hidden = false;
@@ -595,19 +671,16 @@ async function restoreToken() {
 if (typeof Office !== "undefined" && typeof Office.onReady === "function") {
   Office.onReady(async (info) => {
     state.hostKind = detectHostKind(info);
-    initTaskpane();
-    bindStartButton();
+    startApp();
   });
   // 兜底：8 秒内 Office.js 没就绪（如 CDN 被拦截）也初始化——配对不依赖 Office API
   setTimeout(() => {
     if (!_initialized) {
-      log("⚠ Office.js 加载超时（CDN 可能被拦截），已进入降级模式：配对可用，写入可能失败");
-      initTaskpane();
-      bindStartButton();
+      state.degraded = true;
+      startApp(); // initTaskpane 里的 applyHostUi 负责打印降级提示
     }
   }, 8000);
 } else {
-  log("⚠ 未检测到 Office 环境（office.js 未加载），已进入降级模式：配对可用，写入可能失败");
-  initTaskpane();
-  bindStartButton();
+  state.degraded = true;
+  startApp();
 }

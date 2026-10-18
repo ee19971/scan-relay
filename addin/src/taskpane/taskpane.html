@@ -6,6 +6,11 @@
   <title>Scan-Relay 扫码录入</title>
   <style>
     * { box-sizing: border-box; }
+    /* 必须保留：元素带 .row{display:flex} 等作者样式时，浏览器默认的
+       [hidden]{display:none} 会被覆盖，element.hidden = true 就失效了。
+       （曾导致 Word/PPT 里本该隐藏的「手动取点」按钮照常显示，点了报
+       "Excel is not defined"。） */
+    [hidden] { display: none !important; }
     body {
       font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
       margin: 0; padding: 12px; background: #f6f7f9; color: #222;

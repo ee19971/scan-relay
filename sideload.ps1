@@ -64,29 +64,34 @@ if (-not (Test-Path $launcher)) {
 
 # 5) shortcuts: Desktop + Start Menu (NO autostart, per user choice)
 #    创建桌面/开始菜单快捷方式（按需求：不写 Startup，不做开机自启）
+#    服务现在是后台隐藏运行（没有窗口可关），所以"停止"必须做成显式快捷方式。
+#    start 走 startverbose：双击后弹一次确认框，否则用户看不到任何反馈。
 $wsh = New-Object -ComObject WScript.Shell
 $desktop  = [Environment]::GetFolderPath("Desktop")
 $programs = Join-Path ([Environment]::GetFolderPath("StartMenu")) "Programs"
-$shortcuts = @(
-    @{ Dir = $desktop;  Name = "Scan-Relay 服务.lnk" },
-    @{ Dir = $programs; Name = "Scan-Relay 服务.lnk" }
+$entries = @(
+    @{ Dir = $desktop;  Name = "Scan-Relay 服务.lnk";      Arg = "scanrelay://startverbose"; Desc = "启动 Scan-Relay 中转服务（后台隐藏运行，无窗口）" },
+    @{ Dir = $programs; Name = "Scan-Relay 服务.lnk";      Arg = "scanrelay://startverbose"; Desc = "启动 Scan-Relay 中转服务（后台隐藏运行，无窗口）" },
+    @{ Dir = $desktop;  Name = "停止 Scan-Relay 服务.lnk"; Arg = "scanrelay://stop";         Desc = "停止 Scan-Relay 中转服务" },
+    @{ Dir = $programs; Name = "停止 Scan-Relay 服务.lnk"; Arg = "scanrelay://stop";         Desc = "停止 Scan-Relay 中转服务" }
 )
-foreach ($s in $shortcuts) {
+foreach ($s in $entries) {
     if (-not (Test-Path $s.Dir)) { continue }
     $lnk = $wsh.CreateShortcut((Join-Path $s.Dir $s.Name))
     $lnk.TargetPath = "$env:SystemRoot\System32\wscript.exe"
-    $lnk.Arguments  = '"{0}"' -f $launcher
+    $lnk.Arguments  = '"{0}" {1}' -f $launcher, $s.Arg
     $lnk.WorkingDirectory = $PSScriptRoot
-    $lnk.Description = "启动 Scan-Relay 中转服务（最小化窗口，关闭即停止）"
+    $lnk.Description = $s.Desc
     $lnk.Save()
 }
-Write-Host "[5/5] shortcuts created (Desktop + Start Menu, no autostart)" -ForegroundColor Green
+Write-Host "[5/5] shortcuts created (start + stop, Desktop + Start Menu, no autostart)" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "Done. Fully quit Excel/Word/PowerPoint (incl. background) then reopen:" -ForegroundColor Cyan
 Write-Host "  Home tab -> Scan-Relay group -> 扫码录入" -ForegroundColor Cyan
 Write-Host "If missing, tick 'Shared folder' / 勾选「来自我的计算机的共享文件夹」." -ForegroundColor Cyan
-Write-Host "Server start paths / 服务器启动方式:" -ForegroundColor Cyan
-Write-Host "  - 双击「Scan-Relay 服务」快捷方式（桌面/开始菜单）" -ForegroundColor Cyan
-Write-Host "  - Excel/Word/PPT 任务窗格里的「一键启动服务器」按钮" -ForegroundColor Cyan
-Write-Host "  - 双击 启动Scan-Relay.bat（看控制台输出）" -ForegroundColor Cyan
+Write-Host "Server start/stop paths / 服务启停方式:" -ForegroundColor Cyan
+Write-Host "  - Start / 启动: 双击「Scan-Relay 服务」快捷方式（桌面/开始菜单，后台运行无窗口）" -ForegroundColor Cyan
+Write-Host "  - Start / 启动: Excel/Word/PPT 任务窗格里的「一键启动服务器」按钮" -ForegroundColor Cyan
+Write-Host "  - Stop / 停止: 双击「停止 Scan-Relay 服务」快捷方式（或 scanrelay://stop）" -ForegroundColor Cyan
+Write-Host "  - Console / 看输出: 双击 启动Scan-Relay.bat（这个是带窗口的，关窗即停）" -ForegroundColor Cyan

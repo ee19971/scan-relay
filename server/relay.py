@@ -92,6 +92,11 @@ class Session:
 
 SESSIONS: dict[str, Session] = {}
 
+# 优雅停机（/shutdown -> 停 uvicorn 线程 -> 唤醒 main() 循环）
+SERVERS: list[Any] = []
+SERVER_THREADS: list[threading.Thread] = []
+SHUTDOWN = threading.Event()
+
 
 def get_session(token: str) -> Session:
     if token not in SESSIONS:
@@ -162,7 +167,46 @@ async def healthz() -> JSONResponse:
     return JSONResponse({"ok": True})
 
 
+@app.get("/shutdown")
+async def shutdown(request: Request) -> JSONResponse:
+    """停止服务。仅允许本机回环调用——服务本身监听 0.0.0.0（手机要连），
+    不能让局域网里任何设备都能把它停掉。桌面「停止 Scan-Relay 服务」快捷方式
+    与 scanrelay://stop 都走这里。"""
+    client = request.client.host if request.client else ""
+    if client not in ("127.0.0.1", "::1"):
+        return JSONResponse({"ok": False, "error": "forbidden: loopback only"}, status_code=403)
+    log.info("收到停止请求（来自 %s）", client)
+    threading.Thread(target=stop_servers, daemon=True).start()
+    return JSONResponse({"ok": True, "stopping": True})
+
+
+def stop_servers() -> None:
+    """让两个 uvicorn 线程干净退出，最后唤醒 main() 的等待循环。"""
+    time.sleep(0.3)  # 先把 /shutdown 的响应发出去
+    log.info("正在停止中转服务…")
+    for srv in SERVERS:
+        srv.should_exit = True
+    for th in SERVER_THREADS:
+        th.join(timeout=3.0)
+    SHUTDOWN.set()
+
+
 # ---------------------------------------------------------------- 加载项页面托管（一键启动模式）
+
+class _NoStoreStaticFiles(StaticFiles):
+    """加载项静态资源一律不缓存。
+
+    没有这条时，WebView2 会继续用缓存里的旧 main.js/taskpane.html——改完代码、
+    甚至换了端口都可能拿不到新版（本机缓存里就残留着 localhost:3000 时代的资源）。
+    file_response 的签名在 starlette 各版本间有过变动，故用 *args/**kwargs 兜底。
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Any:
+        resp = super().file_response(*args, **kwargs)
+        resp.headers["Cache-Control"] = "no-store, max-age=0"
+        resp.headers["Pragma"] = "no-cache"
+        return resp
+
 
 def create_ui_app() -> FastAPI:
     """HTTPS 的加载项页面服务：/relay/* 与手机端 API 同源，其余静态托管 dist/。"""
@@ -191,7 +235,7 @@ def create_ui_app() -> FastAPI:
         return RedirectResponse("/taskpane.html")
 
     if ADDIN_DIST.is_dir():
-        ui.mount("/", StaticFiles(directory=str(ADDIN_DIST), html=True), name="addin")
+        ui.mount("/", _NoStoreStaticFiles(directory=str(ADDIN_DIST), html=True), name="addin")
     else:
         @ui.get("/taskpane.html")
         async def missing() -> JSONResponse:
@@ -302,14 +346,28 @@ def main() -> None:
     lan_ip = detect_lan_ip()
     banner = f"""
 ============================================================
-  Scan-Relay 服务已启动
+  Scan-Relay 服务已启动（后台运行，不显示窗口）
 ------------------------------------------------------------
-  Excel 加载项页面 : https://localhost:{UI_PORT}/taskpane.html
+  加载项页面       : https://localhost:{UI_PORT}/taskpane.html（Excel / Word / PowerPoint）
   手机接入地址     : ws://{lan_ip}:{PORT}/ws
   浏览器扫码测试页 : http://{lan_ip}:{PORT}/scan?token=<token>
-  关闭本窗口即停止服务
+  停止方式         : 桌面/开始菜单「停止 Scan-Relay 服务」快捷方式（scanrelay://stop）
+  本机停止接口     : http://127.0.0.1:{PORT}/shutdown（仅回环地址可调用）
+  运行日志         : %LOCALAPPDATA%\\Scan-Relay\\relay.log
 ============================================================"""
-    print(banner)
+    print(banner, flush=True)  # stdout 重定向到文件时是块缓冲，不 flush 会让 banner 滞后很久
+
+    # PID 记录：/shutdown 失效时的兜底（launcher.vbs 读它来 taskkill）
+    local_appdata = os.environ.get("LOCALAPPDATA")
+    state_dir = (Path(local_appdata) if local_appdata else Path.home() / ".scan-relay") / "Scan-Relay"
+    pid_path: Path | None = None
+    try:
+        state_dir.mkdir(parents=True, exist_ok=True)
+        pid_path = state_dir / "relay.pid"
+        pid_path.write_text(str(os.getpid()), encoding="ascii")
+        log.info("PID 文件: %s (pid=%d)", pid_path, os.getpid())
+    except OSError as exc:
+        log.warning("写入 PID 文件失败: %s", exc)
 
     servers = [
         uvicorn.Server(uvicorn.Config(app, host="0.0.0.0", port=PORT, log_level="warning")),
@@ -318,14 +376,27 @@ def main() -> None:
             ssl_certfile=str(cert[0]), ssl_keyfile=str(cert[1]), log_level="warning",
         )),
     ]
-    threads = [threading.Thread(target=s.run, daemon=True) for s in servers]
-    for t in threads:
-        t.start()
+    SERVERS.extend(servers)
+    for s in servers:
+        th = threading.Thread(target=s.run, daemon=True)
+        SERVER_THREADS.append(th)
+        th.start()
+
     try:
-        while True:
-            time.sleep(3600)
+        # 正常退出路径：/shutdown 触发 SHUTDOWN；Ctrl+C 走异常分支
+        while not SHUTDOWN.wait(1.0):
+            pass
+        print("\n已停止", flush=True)
     except KeyboardInterrupt:
-        print("\n已停止")
+        print("\n已停止", flush=True)
+    finally:
+        for s in SERVERS:
+            s.should_exit = True
+        if pid_path is not None:
+            try:
+                pid_path.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # ---------------------------------------------------------------- WebSocket

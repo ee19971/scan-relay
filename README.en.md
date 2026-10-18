@@ -25,14 +25,18 @@ Phone camera scanning / form capture → LAN relay service → Office add-in wri
 ### One-click launch (recommended)
 
 ```
-Double-click 启动Scan-Relay.bat (console) or the "Scan-Relay 服务" shortcut (Desktop / Start Menu, minimized)
+Double-click 启动Scan-Relay.bat (console) or the "Scan-Relay 服务" shortcut (Desktop / Start Menu, runs hidden with no window)
 ```
 
-One process serves both the phone relay (8765) and the add-in page (https://localhost:4443). Closing the window stops the service.
+One process serves both the phone relay (8765) and the add-in page (https://localhost:4443). The shortcut starts the service **with no window** (so it cannot be killed by closing one). To stop it, double-click **"停止 Scan-Relay 服务"** (equivalent to `scanrelay://stop`, which calls the loopback-only `http://127.0.0.1:8765/shutdown`).
 
 Then: open Excel/Word/PowerPoint → "Scan to Sheet" → generate pairing code → scan with phone.
 
 > **If the service stops**: the task pane's server status card probes every 3 s and shows a **Start server** button. It triggers the `scanrelay://` protocol which launches `launcher.vbs` in the background (Windows asks a one-time "open app?" confirmation); the pane auto-reconnects once the service is back.
+>
+> **Note**: the task pane itself is hosted by this service — while it is down, Office cannot even open the pane ("we can't start the add-in"). Start it again from the desktop shortcut and the pane comes back.
+>
+> **Stopping**: the "停止 Scan-Relay 服务" shortcut or `scanrelay://stop`. 启动Scan-Relay.bat is the console/debug path where closing the window does stop the service. The stop endpoint only accepts `127.0.0.1`, so phones on the LAN cannot stop it.
 >
 > Port note: the add-in page uses **4443**, not the usual 3000 — low ports like 3000 are often swallowed by Hyper-V/WinNAT dynamic reservations (`netsh int ipv4 show excludedportrange protocol=tcp`), which looks like "port busy but nothing in netstat" (bind fails with WinError 10013). To change it: set `RELAY_UI_PORT` and update every URL in `addin/manifest.xml`, then re-run `sideload.ps1`.
 
