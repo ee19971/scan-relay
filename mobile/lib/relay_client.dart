@@ -20,27 +20,31 @@ class RelayClient {
   /// 连接 ws://host:port/ws?token=..&role=phone
   Future<bool> connect(Uri wsUri) async {
     disconnect();
+    final channel = WebSocketChannel.connect(wsUri);
+    _channel = channel;
     try {
-      final channel = WebSocketChannel.connect(wsUri);
-      _channel = channel;
-      connected = true;
-      channel.stream.listen(
-        (data) {
-          try {
-            _messages.add(jsonDecode(data as String) as Map<String, dynamic>);
-          } catch (_) {
-            // 忽略非 JSON 消息
-          }
-        },
-        onDone: _handleLoss,
-        onError: (_) => _handleLoss(),
-        cancelOnError: true,
-      );
-      return true;
+      // 等握手完成才算连上——否则网络不通时会谎报"已连接"
+      await channel.ready;
     } catch (_) {
+      if (_channel == channel) _channel = null;
       connected = false;
       return false;
     }
+    if (_channel != channel) return false; // 等待期间被 disconnect/新连接取代
+    connected = true;
+    channel.stream.listen(
+      (data) {
+        try {
+          _messages.add(jsonDecode(data as String) as Map<String, dynamic>);
+        } catch (_) {
+          // 忽略非 JSON 消息
+        }
+      },
+      onDone: _handleLoss,
+      onError: (_) => _handleLoss(),
+      cancelOnError: true,
+    );
+    return true;
   }
 
   void _handleLoss() {
