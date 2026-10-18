@@ -77,6 +77,14 @@ End Function
 
 Function StartRelay()
   If IsUp() Then
+    ' Service is invisible (no window), so double-clicking the start shortcut MUST
+    ' tell the user something -- otherwise "nothing happened" looks like a failure.
+    If verbose Then
+      sh.Popup "Scan-Relay service is already running." & vbCrLf & vbCrLf & _
+               "Add-in page: https://localhost:4443/taskpane.html" & vbCrLf & _
+               "Stop it with the ""Stop Scan-Relay service"" shortcut." & vbCrLf & vbCrLf & _
+               "Log: " & logFile, 8, "Scan-Relay", 64
+    End If
     StartRelay = 0            ' already running, nothing to do
     Exit Function
   End If
