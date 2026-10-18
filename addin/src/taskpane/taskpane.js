@@ -106,7 +106,20 @@ async function writeWordLines(lines) {
   // lines: string[] —— 一次调用整体插到当前光标后，每条占一段；光标跟随到末尾
   return Word.run(async (context) => {
     const range = context.document.getSelection();
-    const text = lines.map(String).join("\r") + "\r";
+
+    // 先看清光标所在段落是不是空段落。Word 文档**永远以段落符结尾**，
+    // 所以每条数据后面都补一个 \r 的话，末尾就会凭空多出一个空段落
+    // （表现为"写完总多一个新行"）。规则改成：
+    //   - 光标停在空段落里 -> 直接写内容，末尾不补 \r
+    //   - 否则 -> 前面补一个段落符换行，末尾同样不补 \r
+    // 这样光标始终停在最后一段内容的末尾，下一条自然另起一行，也不会多空行。
+    const para = range.paragraphs.getFirst();
+    para.load("text");
+    await context.sync();
+    const body = lines.map(String).join("\r");
+    const prefix = para.text && para.text !== "\r" ? "\r" : "";
+    const text = prefix + body;
+
     // "End" = 插到选区之后（Word.InsertLocation 是官方枚举，值 "End"）
     const inserted = range.insertText(text, Word.InsertLocation.end);
     // ① 先提交写入：Office.js 的操作是排队到 sync 才执行，任何异常只要发生在
@@ -130,7 +143,30 @@ async function writeWordLines(lines) {
 async function writePptLines(lines) {
   // lines: string[] —— 追加到当前幻灯片一个专用文本框（不存在则创建）
   return PowerPoint.run(async (context) => {
-    const slide = context.presentation.getSelectedSlide();
+    const pres = context.presentation;
+
+    // 取"当前页"：官方接口是 getSelectedSlides()（API set PowerPointApi 1.5），
+    // 返回的集合里**第一项就是编辑区可见的那一页**。
+    // 注意：没有任何 API 集提供单数的 getSelectedSlide()，调用只会抛
+    // "is not a function"（本次实测踩到）。
+    let slide = null;
+    let note = "";
+    if (typeof pres.getSelectedSlides === "function") {
+      const sel = pres.getSelectedSlides();
+      sel.load("items");
+      await context.sync();
+      slide = sel.items[0];
+    }
+    if (!slide) {
+      // 拿不到选中页（某些视图状态下集合可能是空的）才退回第一页，并明确告知，
+      // 而不是静默写到错误的地方
+      pres.slides.load("items");
+      await context.sync();
+      if (!pres.slides.items.length) throw new Error("演示文稿里还没有幻灯片");
+      slide = pres.slides.items[0];
+      note = "未能取得当前选中页，已写入第 1 页";
+    }
+
     const shapes = slide.shapes;
     shapes.load("items");
     await context.sync();
@@ -144,7 +180,9 @@ async function writePptLines(lines) {
       box = shapes.items.find((s) => s.name === PPT_TEXTBOX_NAME);
     }
     if (!box) {
-      box = slide.shapes.addTextBox("", 40, 120, 560, 300);
+      // 注意 addTextBox 的第二个参数是**对象** {left, top, width, height}，
+      // 不是 VBA 那种位置参数；写成 addTextBox("", 40, 120, 560, 300) 会直接报错
+      box = slide.shapes.addTextBox("", { left: 40, top: 120, width: 560, height: 300 });
       box.name = PPT_TEXTBOX_NAME;
     }
     const textRange = box.textFrame.textRange;
@@ -154,6 +192,8 @@ async function writePptLines(lines) {
     const prefix = textRange.text ? textRange.text.replace(/\n$/, "") + "\n" : "";
     textRange.text = prefix + lines.map((l) => String(l)).join("\n");
     await context.sync();
+
+    if (note) log("ℹ " + note); // 退回第一页时要说一声
   });
 }
 
