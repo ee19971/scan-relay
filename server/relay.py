@@ -292,6 +292,31 @@ def find_dev_cert() -> tuple[Path, Path] | None:
     return None
 
 
+def _read_recorded_thumbprint() -> str:
+    """读回上次记录的证书指纹（读不到就返回空串）。"""
+    try:
+        import winreg
+
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Scan-Relay") as key:
+            value, _ = winreg.QueryValueEx(key, "LocalhostCertThumbprint")
+        return str(value or "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _remove_cert_from_root(thumbprint: str) -> None:
+    """把指定指纹的证书从当前用户受信根目录删掉（与卸载器同一套做法）。"""
+    try:
+        subprocess.run(
+            ["certutil", "-user", "-delstore", "Root", thumbprint],
+            capture_output=True,
+            timeout=30,
+        )
+        log.info("已清理上一张 localhost 证书（%s…）", thumbprint[:12])
+    except Exception as exc:  # noqa: BLE001
+        log.debug("清理旧证书失败（不影响使用）: %r", exc)
+
+
 def _record_cert_thumbprint(thumbprint: str) -> None:
     """把根证书指纹写进注册表，供卸载器定位并删除。
 
@@ -299,8 +324,15 @@ def _record_cert_thumbprint(thumbprint: str) -> None:
     不记指纹的话，反复安装/卸载就会越积越多条废弃的 localhost 证书，
     每次启动 relay.py 又会生成一张新的、再装一条进去。
 
+    覆盖旧记录之后，再把旧记录对应的证书从受信根里删掉：`.certs/` 要是被人为
+    删了（排障时很常见），relay 会重新生成一张并覆盖这条记录，旧证书就成了
+    没人认领的孤儿 —— 卸载器只认最后一条记录，永远删不到它。顺手清掉之后，
+    「Scan-Relay 装进 Root 的证书最多只有一张」这个不变量才成立。
+
     写不进去也不影响任何功能，卸载时最多留一条证书。
     """
+    previous = _read_recorded_thumbprint()
+
     try:
         import winreg
 
@@ -311,6 +343,10 @@ def _record_cert_thumbprint(thumbprint: str) -> None:
         log.info("已记录证书指纹到 HKCU\\Software\\Scan-Relay")
     except Exception as exc:  # noqa: BLE001
         log.debug("记录证书指纹失败（不影响使用）: %r", exc)
+
+    # 清理放在记录之后：记录先指向真正装进去的那张，清理只是尽力而为。
+    if previous and previous.upper() != thumbprint.upper():
+        _remove_cert_from_root(previous)
 
 
 def _console_text(raw: bytes) -> str:
