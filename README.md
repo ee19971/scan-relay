@@ -237,7 +237,7 @@ powershell -ExecutionPolicy Bypass -File packaging\build-release.ps1
 - [x] Android 模拟器端到端：扫码模式 `scan` 消息、表单模式 `form_submit` 消息均到达加载项端
 - [x] 真机 Excel（M365 企业版）侧载成功，配对二维码 + 手机扫码链路跑通
 - [x] 多宿主 manifest（Workbook/Document/Presentation + Office 1.1 通用要求集）
-- [x] launcher.vbs 冷启动：`scanrelay://` 协议唤起 → 双端口 healthz 就绪（避开了 Hyper-V 保留段的 3000/3443）
+- [x] `scanrelay://` 协议冷启动：任务窗格按钮唤起托盘并拉起中转服务 → 双端口 healthz 起来（避开 Hyper-V 保留段 3000/3443）
 - [x] 剪贴板注入端到端：`POST /inject`（仅回环地址）→ 伪造 `role=addin` 连接收到 `value`/`symbology=CLIPBOARD`/`source=clipboard`
 - [x] 托盘日志回退：`relay.log` 被独占（cmd `>>` 重定向不共享写权限）时托盘日志落到 `tray.log`，且中转服务**仍能正常启动**（修复前会因写 banner 失败而直接放弃启动）
 

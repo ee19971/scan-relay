@@ -46,52 +46,79 @@ New-ItemProperty -Path $regPath -Name "Flags" -Value 1            -PropertyType 
 Write-Host "[3/5] registry written: $regPath" -ForegroundColor Green
 
 # 4) register scanrelay:// protocol (HKCU, no admin needed)
-#    注册自定义协议，加载项里的「一键启动服务器」按钮靠它唤起 launcher.vbs
-$launcher = Join-Path $PSScriptRoot "launcher.vbs"
-if (-not (Test-Path $launcher)) {
-    Write-Host "[4/5] launcher.vbs not found, skipping protocol registration" -ForegroundColor Yellow
+#    注册自定义协议：加载项任务窗格里的「一键启动服务器」按钮靠它唤起托盘程序。
+#    tray.py 收到 scanrelay://start 只拉起中转服务，不会多开一个托盘图标。
+#    出口解析：
+#      A. 已装安装包 -> 用它自带的解释器，目标机器不需要装 Python（推荐）
+#      B. 没装       -> 回退到仓库版 server\tray.py + PATH 上的 pythonw.exe
+#                       （需先 pip install -r server\requirements.txt）
+$installedDir  = Join-Path $env:LOCALAPPDATA "Programs\Scan-Relay"
+$installedPy   = Join-Path $installedDir "python\pythonw.exe"
+$installedTray = Join-Path $installedDir "server\tray.py"
+
+if (Test-Path $installedPy) {
+    $pyExe   = $installedPy
+    $trayPy  = $installedTray
+    $iconIco = Join-Path $installedDir "assets\icon.ico"
+    $runDir  = $installedDir
+    $pySrc   = "installed bundle"
 } else {
+    $cmd     = Get-Command pythonw.exe -ErrorAction SilentlyContinue
+    $pyExe   = if ($cmd) { $cmd.Source } else { $null }
+    $trayPy  = Join-Path $PSScriptRoot "server\tray.py"
+    $iconIco = Join-Path $PSScriptRoot "dist\standalone\assets\icon.ico"
+    $runDir  = $PSScriptRoot
+    $pySrc   = "repo (pythonw.exe from PATH)"
+}
+
+if (-not $pyExe -or -not (Test-Path -LiteralPath $trayPy)) {
+    $hasEntry = $false
+    Write-Host "[4/5] no usable entry point, skipping protocol + shortcut" -ForegroundColor Yellow
+    Write-Host "      install Scan-Relay first (recommended), or put pythonw.exe on PATH" -ForegroundColor Yellow
+    Write-Host "      建议先装 Scan-Relay 安装包；否则请把 pythonw.exe 放进 PATH" -ForegroundColor Yellow
+} else {
+    $hasEntry = $true
     $protoPath = "HKCU:\Software\Classes\scanrelay"
     $cmdPath   = "HKCU:\Software\Classes\scanrelay\shell\open\command"
     if (-not (Test-Path $protoPath)) { New-Item -Path $protoPath -Force | Out-Null }
     New-ItemProperty -Path $protoPath -Name "(default)"    -Value "URL:Scan-Relay Launcher" -PropertyType String -Force | Out-Null
     New-ItemProperty -Path $protoPath -Name "URL Protocol" -Value ""                        -PropertyType String -Force | Out-Null
     if (-not (Test-Path $cmdPath)) { New-Item -Path $cmdPath -Force | Out-Null }
-    $protoCmd = 'wscript.exe "{0}" "%1"' -f $launcher
+    $protoCmd = '"{0}" "{1}" "%1"' -f $pyExe, $trayPy
     New-ItemProperty -Path $cmdPath -Name "(default)" -Value $protoCmd -PropertyType String -Force | Out-Null
-    Write-Host "[4/5] protocol registered: scanrelay:// -> $launcher" -ForegroundColor Green
+    Write-Host "[4/5] protocol registered: scanrelay:// -> $trayPy  [$pySrc]" -ForegroundColor Green
 }
 
 # 5) shortcuts: Desktop + Start Menu (NO autostart, per user choice)
-#    创建桌面/开始菜单快捷方式（按需求：不写 Startup，不做开机自启）
-#    服务现在是后台隐藏运行（没有窗口可关），所以"停止"必须做成显式快捷方式。
-#    start 走 startverbose：双击后弹一次确认框，否则用户看不到任何反馈。
-$wsh = New-Object -ComObject WScript.Shell
-$desktop  = [Environment]::GetFolderPath("Desktop")
-$programs = Join-Path ([Environment]::GetFolderPath("StartMenu")) "Programs"
-$entries = @(
-    @{ Dir = $desktop;  Name = "Scan-Relay 服务.lnk";      Arg = "scanrelay://startverbose"; Desc = "启动 Scan-Relay 中转服务（后台隐藏运行，无窗口）" },
-    @{ Dir = $programs; Name = "Scan-Relay 服务.lnk";      Arg = "scanrelay://startverbose"; Desc = "启动 Scan-Relay 中转服务（后台隐藏运行，无窗口）" },
-    @{ Dir = $desktop;  Name = "停止 Scan-Relay 服务.lnk"; Arg = "scanrelay://stop";         Desc = "停止 Scan-Relay 中转服务" },
-    @{ Dir = $programs; Name = "停止 Scan-Relay 服务.lnk"; Arg = "scanrelay://stop";         Desc = "停止 Scan-Relay 中转服务" }
-)
-foreach ($s in $entries) {
-    if (-not (Test-Path $s.Dir)) { continue }
-    $lnk = $wsh.CreateShortcut((Join-Path $s.Dir $s.Name))
-    $lnk.TargetPath = "$env:SystemRoot\System32\wscript.exe"
-    $lnk.Arguments  = '"{0}" {1}' -f $launcher, $s.Arg
-    $lnk.WorkingDirectory = $PSScriptRoot
-    $lnk.Description = $s.Desc
-    $lnk.Save()
+#    创建桌面/开始菜单快捷方式（按需求：不写 Startup，不做开机自启）。
+#    只建一个入口，语义与安装包一致：双击 = 启动/接管中转服务 + 显示托盘图标。
+#    不再单独建「停止」快捷方式 —— 通知区域图标的右键菜单「退出」才是唯一的
+#    停止方式；同一个服务有两个控制点迟早会打架。
+if (-not $hasEntry) {
+    Write-Host "[5/5] skipped (no entry point, see [4/5])" -ForegroundColor Yellow
+} else {
+    $wsh = New-Object -ComObject WScript.Shell
+    $desktop  = [Environment]::GetFolderPath("Desktop")
+    $programs = Join-Path ([Environment]::GetFolderPath("StartMenu")) "Programs"
+    foreach ($dir in @($desktop, $programs)) {
+        if (-not (Test-Path $dir)) { continue }
+        $lnk = $wsh.CreateShortcut((Join-Path $dir "Scan-Relay.lnk"))
+        $lnk.TargetPath = $pyExe
+        $lnk.Arguments  = '"{0}"' -f $trayPy
+        $lnk.WorkingDirectory = $runDir
+        $lnk.Description = "启动 Scan-Relay 中转服务并显示任务栏图标"
+        if (Test-Path -LiteralPath $iconIco) { $lnk.IconLocation = $iconIco }
+        $lnk.Save()
+    }
+    Write-Host "[5/5] shortcut created: Scan-Relay.lnk (Desktop + Start Menu, no autostart)" -ForegroundColor Green
 }
-Write-Host "[5/5] shortcuts created (start + stop, Desktop + Start Menu, no autostart)" -ForegroundColor Green
 
 Write-Host ""
 Write-Host "Done. Fully quit Excel/Word/PowerPoint (incl. background) then reopen:" -ForegroundColor Cyan
 Write-Host "  Home tab -> Scan-Relay group -> 扫码录入" -ForegroundColor Cyan
 Write-Host "If missing, tick 'Shared folder' / 勾选「来自我的计算机的共享文件夹」." -ForegroundColor Cyan
 Write-Host "Server start/stop paths / 服务启停方式:" -ForegroundColor Cyan
-Write-Host "  - Start / 启动: 双击「Scan-Relay 服务」快捷方式（桌面/开始菜单，后台运行无窗口）" -ForegroundColor Cyan
+Write-Host "  - Start / 启动: 双击「Scan-Relay」快捷方式（桌面/开始菜单）" -ForegroundColor Cyan
 Write-Host "  - Start / 启动: Excel/Word/PPT 任务窗格里的「一键启动服务器」按钮" -ForegroundColor Cyan
-Write-Host "  - Stop / 停止: 双击「停止 Scan-Relay 服务」快捷方式（或 scanrelay://stop）" -ForegroundColor Cyan
-Write-Host "  - Console / 看输出: 双击 启动Scan-Relay.bat（这个是带窗口的，关窗即停）" -ForegroundColor Cyan
+Write-Host "  - Stop / 停止: 右键通知区域（可能收在 ^ 里）的 Scan-Relay 图标 -> 退出" -ForegroundColor Cyan
+Write-Host "  - Logs / 看输出: %LOCALAPPDATA%\Scan-Relay\relay.log（托盘无控制台，日志写文件）" -ForegroundColor Cyan

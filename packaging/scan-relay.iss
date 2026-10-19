@@ -169,8 +169,8 @@ end;
   却在安装目录留下半截 python\\ 和 server\\。原因是托盘以 pythonw.exe 常驻，
   它运行期间其映像被系统以共享写保护锁定，DeleteFile 会撞 sharing violation。
 
-  quit 内部先走 /shutdown HTTP 端点（旧 launcher.vbs 起的服务没有托盘，
-  那种情况走 PID 文件兜底），再按 tray.pid 精确 taskkill 托盘并等它真死，
+  quit 内部先走 /shutdown HTTP 端点（服务若不在托盘管辖内，就退回 PID 文件兜底），
+  再按 tray.pid 精确 taskkill 托盘并等它真死，
   所以 Exec 返回时进程必然已退出 —— 这也让后面的文件删除是确定性的。
 
   托盘不存在（首次安装）时整个分支跳过。

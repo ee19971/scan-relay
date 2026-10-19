@@ -72,8 +72,8 @@ def tray_log(message: str) -> None:
     """把托盘自己的动作落盘（pythonw 下没有控制台，print 会无声丢失）。
 
     优先写 relay.log，这样「查看日志」只要开一个文件；但 relay.log 随时可能被
-    **独占** —— cmd 的 `>>` 重定向不共享写权限，用 launcher.vbs /
-    启动Scan-Relay.bat 起的服务就属于这种（本机实测连 os.open 都被拒）。
+    **独占** —— 例如服务是被 `cmd /c python relay.py >> relay.log` 这样起的：
+    `>>` 重定向不共享写权限，本进程连 os.open 都会被拒（本机实测）。
     写不进去就落到 tray.log，绝不能因为日志不可写就丢掉托盘的动作记录。
     本函数任何异常都不能外抛——它自己就是错误处理路径。
     """

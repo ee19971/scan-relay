@@ -246,7 +246,7 @@ What each file in `packaging/` does:
 - [x] Android emulator end-to-end: `scan` and `form_submit` messages both reach the add-in
 - [x] Real phone + Excel (M365) sideload, QR pairing and scan pipeline all working
 - [x] Multi-host manifest (Workbook/Document/Presentation + generic Office 1.1 requirement set)
-- [x] launcher.vbs cold start: `scanrelay://` protocol launch → both healthz endpoints up (avoids the Hyper-V-reserved 3000/3443)
+- [x] `scanrelay://` cold start: the task-pane button wakes the tray and starts the relay → both healthz endpoints up (avoids the Hyper-V-reserved 3000/3443)
 - [x] Clipboard injection end-to-end: `POST /inject` (loopback only) → a fake `role=addin` connection receives `value` / `symbology=CLIPBOARD` / `source=clipboard`
 - [x] Tray log fallback: when `relay.log` is held exclusively (cmd `>>` redirection does not share write access) tray logging falls back to `tray.log`, and the relay **still starts normally** (before the fix it gave up because writing the banner failed)
 - [x] Installer end-to-end on a clean machine: silent install → URL protocol, shortcuts and the TrustedCatalogs key all correct; desktop-icon start brings the relay up in ~1 s; the embedded runtime passes a 17/17 self-test

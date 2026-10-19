@@ -704,8 +704,8 @@ function bindStartButton() {
     hint.hidden = false;
     hint.textContent = "正在请求启动（若弹出确认框请点「打开」）…";
     log("请求启动中转服务（scanrelay://）");
-    // 触发自定义协议唤起本地启动器（anchor 点击是 WebView2 支持最稳的方式，
-    // 系统会弹一次「是否打开 launcher.vbs」确认）
+    // 触发自定义协议唤起托盘程序（anchor 点击是 WebView2 支持最稳的方式，
+    // 系统会弹一次「是否打开 Scan-Relay」确认）
     const a = document.createElement("a");
     a.href = START_PROTOCOL;
     a.style.display = "none";
@@ -723,7 +723,7 @@ function bindStartButton() {
         setServerCard(true);
       } else if (waited >= 20) { // 20 次 x 1.5 秒 = 30 秒超时
         clearInterval(timer);
-        hint.textContent = "启动超时：请确认弹窗中点了「打开」，或手动运行 启动Scan-Relay.bat";
+        hint.textContent = "启动超时：请确认弹窗中点了「打开」，或双击桌面上的 Scan-Relay 图标手动启动";
       }
     }, 1500);
   };
