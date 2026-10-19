@@ -7,10 +7,16 @@ const HtmlWebpackPlugin = require("html-webpack-plugin");
 const CopyWebpackPlugin = require("copy-webpack-plugin");
 const devCerts = require("office-addin-dev-certs");
 
-module.exports = async () => {
-  const httpsOptions = await devCerts.getHttpsServerOptions();
+module.exports = async (env, argv) => {
+  // 只有开发服务器（npm start = --mode development）才需要 devServer 和它的 HTTPS 证书。
+  // 生产构建（npm run build = --mode production）绝不能在这里碰 office-addin-dev-certs：
+  // 证书缺失或不受信时 getHttpsServerOptions() 会弹交互式确认，在没有终端的
+  // 自动化环境里会直接挂住（本机实测卡死 15 分钟，直到超时）。
+  const mode = (argv && argv.mode) || "production";
+  const isDev = mode === "development";
+  const httpsOptions = isDev ? await devCerts.getHttpsServerOptions() : undefined;
 
-  return {
+  const config = {
     entry: "./src/taskpane/taskpane.js",
     devtool: "source-map",
     resolve: { extensions: [".js"] },
@@ -23,7 +29,10 @@ module.exports = async () => {
         patterns: [{ from: "assets", to: "assets" }],
       }),
     ],
-    devServer: {
+  };
+
+  if (isDev) {
+    config.devServer = {
       port: 4443,
       server: { type: "https", options: httpsOptions },
       headers: { "Access-Control-Allow-Origin": "*" },
@@ -36,6 +45,8 @@ module.exports = async () => {
           pathRewrite: { "^/relay": "" },
         },
       ],
-    },
-  };
+    };
+  }
+
+  return config;
 };
