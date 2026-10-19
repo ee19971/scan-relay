@@ -180,6 +180,43 @@ async def shutdown(request: Request) -> JSONResponse:
     return JSONResponse({"ok": True, "stopping": True})
 
 
+@app.post("/inject")
+async def inject(request: Request) -> JSONResponse:
+    """把一段本机文本（典型场景：剪贴板内容）推给所有已连接的加载项。
+
+    与 /shutdown 一样只允许回环地址调用：服务监听 0.0.0.0 是为了让手机接入，
+    但绝不能让局域网里任何设备都往你的表格里写东西。
+    托盘菜单「发送剪贴板到文档」走这里 —— 手机没连也能用，也不依赖配对 token。
+    """
+    client = request.client.host if request.client else ""
+    if client not in ("127.0.0.1", "::1"):
+        return JSONResponse({"ok": False, "error": "forbidden: loopback only"}, status_code=403)
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    value = body.get("value") if isinstance(body, dict) else None
+    if not isinstance(value, str) or not value.strip():
+        return JSONResponse({"ok": False, "error": "value is empty"}, status_code=400)
+
+    addins = sum(len(s.addins) for s in SESSIONS.values())
+    if addins == 0:
+        return JSONResponse({"ok": False, "error": "no add-in connected", "addins": 0})
+
+    message = {
+        "type": "scan",
+        "value": value,
+        "symbology": "CLIPBOARD",
+        "source": "clipboard",
+        "ts": int(time.time() * 1000),
+    }
+    for session in list(SESSIONS.values()):
+        await broadcast(session.addins, message)
+    log.info("注入剪贴板文本（%d 字符）到 %d 个加载项", len(value), addins)
+    return JSONResponse({"ok": True, "addins": addins, "chars": len(value)})
+
+
 def stop_servers() -> None:
     """让两个 uvicorn 线程干净退出，最后唤醒 main() 的等待循环。"""
     time.sleep(0.3)  # 先把 /shutdown 的响应发出去
@@ -255,6 +292,27 @@ def find_dev_cert() -> tuple[Path, Path] | None:
     return None
 
 
+def _record_cert_thumbprint(thumbprint: str) -> None:
+    """把根证书指纹写进注册表，供卸载器定位并删除。
+
+    证书装在「当前用户受信根目录」，但 `.certs/` 会随安装目录一起被删 ——
+    不记指纹的话，反复安装/卸载就会越积越多条废弃的 localhost 证书，
+    每次启动 relay.py 又会生成一张新的、再装一条进去。
+
+    写不进去也不影响任何功能，卸载时最多留一条证书。
+    """
+    try:
+        import winreg
+
+        with winreg.CreateKeyEx(
+            winreg.HKEY_CURRENT_USER, r"Software\Scan-Relay", 0, winreg.KEY_SET_VALUE
+        ) as key:
+            winreg.SetValueEx(key, "LocalhostCertThumbprint", 0, winreg.REG_SZ, thumbprint)
+        log.info("已记录证书指纹到 HKCU\\Software\\Scan-Relay")
+    except Exception as exc:  # noqa: BLE001
+        log.debug("记录证书指纹失败（不影响使用）: %r", exc)
+
+
 def ensure_selfsigned_cert() -> tuple[Path, Path]:
     """生成 localhost 自签名证书并安装到当前用户受信根目录（无需管理员）。"""
     from cryptography import x509
@@ -304,6 +362,11 @@ def ensure_selfsigned_cert() -> tuple[Path, Path]:
     )
     if result.returncode == 0:
         log.info("证书已加入当前用户受信根目录")
+        # 记下指纹，供卸载器把这张证书从受信根里删掉。
+        # `.certs/` 会跟着安装目录一起被删除，不记指纹的话，每装一次就在
+        # 用户受信根里永久留下一条废弃的 localhost 证书，越积越多。
+        # 只在真正装进证书存储成功后才记 —— 装失败就不用记了。
+        _record_cert_thumbprint(cert.fingerprint(hashes.SHA1()).hex().upper())
     else:
         log.warning("证书自动安装失败（%s），Excel 可能提示证书错误", result.stderr.strip())
     return crt, key
@@ -351,13 +414,13 @@ def main() -> None:
   加载项页面       : https://localhost:{UI_PORT}/taskpane.html（Excel / Word / PowerPoint）
   手机接入地址     : ws://{lan_ip}:{PORT}/ws
   浏览器扫码测试页 : http://{lan_ip}:{PORT}/scan?token=<token>
-  停止方式         : 桌面/开始菜单「停止 Scan-Relay 服务」快捷方式（scanrelay://stop）
+  停止方式         : 任务栏托盘图标右键 →「退出」（也可 scanrelay://stop）
   本机停止接口     : http://127.0.0.1:{PORT}/shutdown（仅回环地址可调用）
   运行日志         : %LOCALAPPDATA%\\Scan-Relay\\relay.log
 ============================================================"""
     print(banner, flush=True)  # stdout 重定向到文件时是块缓冲，不 flush 会让 banner 滞后很久
 
-    # PID 记录：/shutdown 失效时的兜底（launcher.vbs 读它来 taskkill）
+    # PID 记录：/shutdown 失效时的兜底（tray.py 的 stop_relay 读它来 taskkill）
     local_appdata = os.environ.get("LOCALAPPDATA")
     state_dir = (Path(local_appdata) if local_appdata else Path.home() / ".scan-relay") / "Scan-Relay"
     pid_path: Path | None = None

@@ -18,27 +18,55 @@
 - `server/` —— 本地中转服务（配对、会话、WebSocket 转发）
 - `addin/`  —— Office JS 加载项（配对二维码、连续扫码、表单设计器）
 - `mobile/` —— Flutter 手机 App（Android / iOS，扫码配对 + 采集）
+- `packaging/` —— 安装包构建（Inno Setup + 内嵌 Python 运行时）
 - `docs/`   —— 补充文档
 
 ## 快速开始
 
-### 一键启动（推荐，日常使用）
+### 安装（推荐，日常使用）
+
+下载 Release 里的 `Scan-Relay-Setup-x.y.z.exe`，双击安装即可 —— **全程免管理员权限，无 UAC 弹窗**：
+
+- 装到 `%LOCALAPPDATA%\Programs\Scan-Relay`（只对当前用户生效）
+- 自动注册成 Excel/Word/PPT 的「受信任的加载项目录」
+- 注册 `scanrelay://` 协议（任务窗格的「一键启动服务器」按钮靠它唤起服务）
+- 创建桌面与开始菜单图标
+
+装完**完全退出** Excel/Word/PPT 再打开（右下角托盘里可能还留着 Office 后台进程，那里也要退出），
+然后「开始 → 加载项 → 我的加载项 → 共享文件夹」里就能看到 Scan-Relay。
+
+### 启停方式
 
 ```
-双击「启动Scan-Relay.bat」（看控制台） 或 桌面/开始菜单的「Scan-Relay 服务」快捷方式（后台隐藏运行，无窗口）
+双击桌面/开始菜单「Scan-Relay」图标
+  → 启动中转服务 + 弹「中转服务已启动」通知 + 任务栏通知区域出现图标
+
+托盘图标右键 → 打开加载页面 / 发送剪贴板到文档 / 启动·重启中转服务 / 查看日志 / 退出
+         单击 → 直接打开加载页面
 ```
 
-一个进程同时提供：手机接入（8765）+ 加载项页面托管（https://localhost:4443）。快捷方式启动的服务**没有窗口**（避免误关窗口导致服务被杀）；停止请双击**「停止 Scan-Relay 服务」**快捷方式（等价于 `scanrelay://stop`，调用仅回环地址可访问的 `http://127.0.0.1:8765/shutdown`）。
+服务本身以**无可见窗口**的方式运行，没有窗口可供误关。停止的正路是托盘右键「退出」
+（或任务窗格里的停止，等价于 `scanrelay://stop`）。停止接口只接受 `127.0.0.1`，
+局域网内的手机无法停掉服务。
 
-之后只需：打开 Excel/Word/PPT →「扫码录入」→ 生成配对码 → 手机扫码。
+> **没有任何开机自启**：不写 Startup、不注册登录任务，服务是否运行完全由你手动决定。
+>
+> **托盘图标找不到**：Windows 默认把新出现的托盘图标折叠进「显示隐藏的图标」（^ 小箭头）。
+> 点开那个箭头，把 Scan-Relay 拖出来常驻即可 —— 只需拖一次，之后一直显示。
+>
+> **服务挂了怎么办**：任务窗格里的「服务器状态卡」每 3 秒探测一次，停止时显示 **🚀 一键启动服务器** 按钮，点击即通过 `scanrelay://` 协议唤起托盘拉起服务（系统会弹一次「是否打开」确认），服务恢复后窗格自动重连。服务彻底停止时 Office 连窗格都打不开（表现为"无法启动加载项"），此时双击桌面图标即可恢复。
+>
+> 端口说明：加载项页面默认端口是 **4443** 而非常见的 3000——3000 等低端口常被 Hyper-V/WinNAT 动态保留（`netsh int ipv4 show excludedportrange protocol=tcp` 可查看），表现为"端口被占用但 netstat 看不到占用者"（bind 报 WinError 10013）。如需改端口：设置 `RELAY_UI_PORT` 环境变量并同步修改 `addin/manifest.xml` 里的全部 URL，然后重新安装。
 
-> **服务挂了怎么办**：任务窗格里的「服务器状态卡」会自动探测（3 秒一次），停止时显示 **🚀 一键启动服务器** 按钮，点击即通过 `scanrelay://` 协议唤起 launcher.vbs 后台拉起服务（系统会弹一次「是否打开」确认），服务恢复后窗格自动重连。
->
-> **注意**：任务窗格页面本身就托管在这个服务上——服务彻底停止时，Office 连窗格都打不开（表现为"无法启动加载项"）。此时用桌面快捷方式重新启动即可，启动后窗格恢复。
->
-> **停止方式**：「停止 Scan-Relay 服务」快捷方式 / `scanrelay://stop`；`启动Scan-Relay.bat` 是带窗口的调试通道，对它而言"关窗口即停"仍然成立。停止接口只接受 `127.0.0.1`，局域网内的手机无法停掉服务。
->
-> 端口说明：加载项页面默认端口是 **4443** 而非常见的 3000——3000 等低端口常被 Hyper-V/WinNAT 动态保留（`netsh int ipv4 show excludedportrange protocol=tcp` 可查看），表现为"端口被占用但 netstat 看不到占用者"（bind 报 WinError 10013）。如需改端口：设置 `RELAY_UI_PORT` 环境变量并同步修改 `addin/manifest.xml` 里的全部 URL，重新执行 `sideload.ps1`。
+### 把剪贴板内容直接写进文档
+
+托盘右键「**发送剪贴板到文档**」会把当前剪贴板文本按一条扫码消息推给所有已打开的
+加载项窗口，效果与扫码完全一致（多列自动分列、重复保护、流式模式的追加行为都照常生效）。
+
+- 手机没连、甚至没配对也能用 —— 这条链路完全在本机
+- 只在**流式模式**下生效；表单模式的窗口会被忽略（表单模式由手机端按字段提交）
+- 剪贴板超过 10000 字符会被截断，避免误复制一整篇文档时灌爆表格
+- 托盘会弹通知告诉你发送了多少字符、到了几个窗口；没有任何窗口打开时会明确提示
 
 ### 手动启动（开发模式）
 
@@ -65,13 +93,20 @@ npm start        # https://localhost:4443，首次会自动安装受信开发证
 
 ### 3. 在 Office 中侧载加载项（Excel / Word / PowerPoint 通用）
 
+**装了安装包的话这一步已经自动完成**：安装程序把 `%LOCALAPPDATA%\Programs\Scan-Relay\addin`
+注册成「受信任的加载项目录」（写 `HKCU\Software\Microsoft\Office\16.0\Wef\TrustedCatalogs`，
+无需管理员权限）。重启 Office 后即可：
+
 1. 打开 Excel / Word / PowerPoint（桌面版）
-2. **插入 → 加载项 → 我的加载项 → 上载我的加载项**，选择 `addin/manifest.xml`
-   （或直接运行 `sideload.ps1`：自动复制 manifest 到共享目录 + 写受信任目录注册表 + 注册 `scanrelay://` 协议 + 创建快捷方式，无需管理员权限）
+2. **开始 → 加载项 → 我的加载项 → 共享文件夹**，选中 Scan-Relay
 3. 首页「开始」选项卡会出现 **Scan-Relay → 扫码录入** 按钮，点击打开任务窗格
 4. 点 **生成配对码**，显示二维码和连接状态
 
 > 自用侧载无需 AppSource 审核。证书提示时选"是/安装"。
+>
+> **没装安装包、想手动侧载**：运行仓库里的 `sideload.ps1`（复制 manifest 到 `C:\ScanRelay`
+> + 写受信任目录注册表 + 注册 `scanrelay://` 协议 + 创建快捷方式），或在
+> **插入 → 加载项 → 我的加载项 → 上载我的加载项**里直接选 `addin/manifest.xml`。
 
 ### 各宿主写入行为
 
@@ -160,6 +195,41 @@ python send_config.py <token>        # 下发表单配置并监听提交（联�
 
 浏览器调试入口：`http://<局域网IP>:8765/scan?token=<token>`（内置 jsQR 网页扫码器，无手机 App 也能测链路）。
 
+## 构建安装包（发布者用）
+
+```powershell
+# 前置：node/npm、Python(含 Pillow)、Inno Setup 6.3+
+powershell -ExecutionPolicy Bypass -File packaging\build-release.ps1
+```
+
+五步：构建加载项 → 组装内嵌 Python 运行时 → 生成图标与说明 → ISCC 编译 → 校验并复制到桌面。
+
+安装包是**自包含**的：里面带着一份完整的内嵌 Python（由 `packaging\fetch-python.ps1` 组装），
+所以目标机器既不需要 Python 也不需要 .NET，双击即用。
+
+`packaging/` 各文件分工：
+
+| 文件 | 作用 |
+|---|---|
+| `build-release.ps1` | 一键流程入口 |
+| `fetch-python.ps1` | 下载 python.org 内嵌包 + 用 `pip --target` 交叉安装锁定版本的依赖 |
+| `requirements-bundle.txt` | 内嵌运行时的依赖清单（比 `server/requirements.txt` 少了开发期才用的 extras） |
+| `smoke.py` | 内嵌运行时自检：把 relay.py / tray.py 真正会用到的路径都跑一遍 |
+| `make-ico.py` | 生成多尺寸 `.ico`（与加载项图标同款条码图案） |
+| `scan-relay.iss` | Inno Setup 脚本 |
+| `install-notes.txt` | 安装完成后展示的说明 |
+
+> **构建机的一个坑**：Inno Setup 的官方安装包现在只发布在 GitHub Releases。
+> 直连不可达时用镜像代理下载，但**下载后必须验签再执行** —— 代理只是搬运工，
+> Authenticode 签名它伪造不了：
+> ```powershell
+> signtool verify /pa /v innosetup-x.y.z.exe     # Windows SDK 自带
+> innosetup-x.y.z.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+> ```
+> 另外注意：`Get-AuthenticodeSignature` 在某些环境会因 PowerShell 模块冲突而不可用，
+> 此时用 `signtool` 或直接读证书对象（`[Security.Cryptography.X509Certificates.X509Certificate]::new($path)`）。
+> 判断签名者身份时别去匹配 `signtool` 的输出文本 —— 那是本地化的，中文机器上没有 `Subject:` 字样。
+
 ## 已验证
 
 - [x] 中转服务全链路自动化测试（9 项断言全部通过）
@@ -168,11 +238,15 @@ python send_config.py <token>        # 下发表单配置并监听提交（联�
 - [x] 真机 Excel（M365 企业版）侧载成功，配对二维码 + 手机扫码链路跑通
 - [x] 多宿主 manifest（Workbook/Document/Presentation + Office 1.1 通用要求集）
 - [x] launcher.vbs 冷启动：`scanrelay://` 协议唤起 → 双端口 healthz 就绪（避开了 Hyper-V 保留段的 3000/3443）
+- [x] 剪贴板注入端到端：`POST /inject`（仅回环地址）→ 伪造 `role=addin` 连接收到 `value`/`symbology=CLIPBOARD`/`source=clipboard`
+- [x] 托盘日志回退：`relay.log` 被独占（cmd `>>` 重定向不共享写权限）时托盘日志落到 `tray.log`，且中转服务**仍能正常启动**（修复前会因写 banner 失败而直接放弃启动）
 
 ## 常见问题
 
 - **手机连不上**：检查防火墙放行 8765；手机与电脑必须同一局域网（访客网络通常隔离）；`curl http://<IP>:8765/` 在手机浏览器能打开即通
-- **加载项连不上**：先启动中转服务（任务窗格状态卡/快捷方式/启动Scan-Relay.bat 任选其一）
+- **加载项连不上**：先启动中转服务（任务窗格状态卡 / 桌面「Scan-Relay」图标 / 托盘右键「启动·重启中转服务」任选其一）
+- **任务栏右侧找不到 Scan-Relay 图标**：Windows 默认把新出现的托盘图标折叠进「显示隐藏的图标」（^ 小箭头）。点开箭头，把图标拖出来常驻即可，只需拖一次。若彻底没有，说明服务还没启动过 —— 双击桌面「Scan-Relay」图标。
+- **卸载后重装，https://localhost:4443 提示证书错误**：属正常，旧证书已随卸载清除，重新双击桌面图标让服务生成并安装新证书即可。
 - **"端口被占用"但 netstat 看不到占用者**：多半是 Hyper-V/WinNAT 动态保留段吞了端口（bind 报 `WinError 10013`），`netsh int ipv4 show excludedportrange protocol=tcp` 可确认；默认端口已避开（8765/4443），若自定义端口中招则换端口或重启系统（保留段每次开机重新分配）
 - **为什么加载项不直连 ws://局域网IP**：Office 加载项页面强制 HTTPS，直连 ws:// 会被 mixed-content 拦截；故经 `wss://localhost:4443/relay` 代理转发（见 `server/relay.py` 的 `/relay/*` 路由）
 - **Excel 侧载的历史坑**（实测记录，供排查参考）：

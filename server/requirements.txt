@@ -1,3 +1,13 @@
 fastapi>=0.115
 uvicorn[standard]>=0.30
 websockets>=13
+# relay.py 在 ensure_selfsigned_cert() 里 lazy import，之前漏列了 ——
+# 新机器上若 ~/.office-addin-dev-certs 不存在，走到生成证书这一步会直接 ImportError
+cryptography>=43
+# tray.py 的依赖（托盘图标 + 图标渲染 + Windows toast 通知）。同样之前漏列：
+# tray.py 和 relay.py 同在 server/，但 `pip install -r requirements.txt` 之后
+# relay 跑得起来、托盘一启动就 ModuleNotFoundError —— 且报错落在 pystray 导入处，
+# 不看代码很难反推是依赖没装全。
+pystray>=0.19
+pillow>=10
+winotify>=1.1

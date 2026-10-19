@@ -16,29 +16,60 @@ Phone camera scanning / form capture → LAN relay service → Office add-in wri
 - `server/` — local relay service (pairing, sessions, WebSocket forwarding)
 - `addin/`  — Office JS add-in (pairing QR, continuous scan, form designer)
 - `mobile/` — Flutter phone app (Android / iOS, QR pairing + capture)
-- `启动Scan-Relay.bat` — one-click launcher (Windows)
+- `packaging/` — installer build (Inno Setup + bundled Python runtime)
+- `docs/`   — supplementary docs
 
 [中文文档](README.md)
 
 ## Quick start
 
-### One-click launch (recommended)
+### Install (recommended)
+
+Grab `Scan-Relay-Setup-x.y.z.exe` from the Release and run it — **no admin rights, no UAC prompt**:
+
+- Installs to `%LOCALAPPDATA%\Programs\Scan-Relay` (current user only)
+- Registers itself as a trusted Office add-in catalog (Excel / Word / PowerPoint)
+- Registers the `scanrelay://` protocol (the pane's "start server" button uses it)
+- Creates Desktop and Start Menu shortcuts
+
+Afterwards **fully quit** Excel/Word/PowerPoint (including any background process still in the
+notification area) and reopen them; Scan-Relay appears under
+**Home → Add-ins → My Add-ins → Shared folder**.
+
+### Starting and stopping
 
 ```
-Double-click 启动Scan-Relay.bat (console) or the "Scan-Relay 服务" shortcut (Desktop / Start Menu, runs hidden with no window)
+Double-click the "Scan-Relay" icon (Desktop / Start Menu)
+  → starts the relay + shows a "service started" notification + adds a tray icon
+
+Tray icon right-click → open add-in page / send clipboard to document / start·restart relay / view log / quit
+              single-click → open the add-in page
 ```
 
-One process serves both the phone relay (8765) and the add-in page (https://localhost:4443). The shortcut starts the service **with no window** (so it cannot be killed by closing one). To stop it, double-click **"停止 Scan-Relay 服务"** (equivalent to `scanrelay://stop`, which calls the loopback-only `http://127.0.0.1:8765/shutdown`).
+The relay runs **with no window**, so there is nothing to close by accident. The way to stop it is
+the tray menu's **Quit** (or the pane's stop, equivalent to `scanrelay://stop`). The stop endpoint
+only accepts `127.0.0.1`, so phones on the LAN cannot stop it.
 
-Then: open Excel/Word/PowerPoint → "Scan to Sheet" → generate pairing code → scan with phone.
+> **No autostart whatsoever**: no Startup entry, no logon task — whether the service runs is entirely up to you.
+>
+> **Tray icon not visible**: Windows hides new tray icons in the notification-area overflow ("^") by
+> default. Open it once and drag Scan-Relay out to pin it. That is a one-time step.
+>
+> **If the service stops**: the task pane's server status card probes every 3 s and shows a **Start server** button. It triggers the `scanrelay://` protocol which launches the tray in the background (Windows asks a one-time "open app?" confirmation); the pane auto-reconnects once the service is back. While the service is down, Office cannot even open the pane ("we can't start the add-in") — double-click the desktop icon to bring it back.
+>
+> Port note: the add-in page uses **4443**, not the usual 3000 — low ports like 3000 are often swallowed by Hyper-V/WinNAT dynamic reservations (`netsh int ipv4 show excludedportrange protocol=tcp`), which looks like "port busy but nothing in netstat" (bind fails with WinError 10013). To change it: set `RELAY_UI_PORT` and update every URL in `addin/manifest.xml`, then reinstall.
 
-> **If the service stops**: the task pane's server status card probes every 3 s and shows a **Start server** button. It triggers the `scanrelay://` protocol which launches `launcher.vbs` in the background (Windows asks a one-time "open app?" confirmation); the pane auto-reconnects once the service is back.
->
-> **Note**: the task pane itself is hosted by this service — while it is down, Office cannot even open the pane ("we can't start the add-in"). Start it again from the desktop shortcut and the pane comes back.
->
-> **Stopping**: the "停止 Scan-Relay 服务" shortcut or `scanrelay://stop`. 启动Scan-Relay.bat is the console/debug path where closing the window does stop the service. The stop endpoint only accepts `127.0.0.1`, so phones on the LAN cannot stop it.
->
-> Port note: the add-in page uses **4443**, not the usual 3000 — low ports like 3000 are often swallowed by Hyper-V/WinNAT dynamic reservations (`netsh int ipv4 show excludedportrange protocol=tcp`), which looks like "port busy but nothing in netstat" (bind fails with WinError 10013). To change it: set `RELAY_UI_PORT` and update every URL in `addin/manifest.xml`, then re-run `sideload.ps1`.
+### Send the clipboard straight into the document
+
+The tray menu's **Send clipboard to document** pushes the current clipboard text to every open
+add-in window as an ordinary scan message — so column auto-advance, duplicate protection and the
+streaming append behaviour all apply unchanged.
+
+- Works with no phone connected (or even paired): the whole path stays on this PC
+- Only takes effect in **streaming mode**; windows sitting in form mode are ignored
+  (form mode is driven field-by-field from the phone)
+- Clipping is capped at 10 000 characters so an accidental whole-document copy cannot flood the sheet
+- The tray reports how many characters went to how many windows; if no window is open it says so
 
 ### Manual launch (development)
 
@@ -65,13 +96,21 @@ After frontend changes run `npm run build` so the one-click mode serves the new 
 
 ### 3. Sideload the add-in into Office (Excel / Word / PowerPoint)
 
+**If you ran the installer, this step is already done for you**: it registers
+`%LOCALAPPDATA%\Programs\Scan-Relay\addin` as a trusted add-in catalog (it writes
+`HKCU\Software\Microsoft\Office\16.0\Wef\TrustedCatalogs`, no admin rights needed). After restarting Office:
+
 1. Open desktop Excel / Word / PowerPoint
-2. **Insert → Add-ins → My Add-ins → Upload My Add-in**, pick `addin/manifest.xml`
-   (or just run `sideload.ps1`: copies the manifest to the shared folder, writes the Trusted Catalogs registry key, registers the `scanrelay://` protocol and creates shortcuts — no admin rights needed)
-3. A **Scan-Relay** button appears on the Home tab; click it to open the task pane
+2. **Home → Add-ins → My Add-ins → Shared folder**, pick Scan-Relay
+3. A **Scan-Relay → 扫码录入** button appears on the Home tab; click it to open the task pane
 4. Click **Generate pairing code** — a QR code and connection status appear
 
-> Personal sideloading needs no AppSource review.
+> Personal sideloading needs no AppSource review. If a certificate prompt appears, choose Yes/Install.
+>
+> **No installer, sideloading by hand**: run `sideload.ps1` from the repo (copies the manifest into
+> `C:\ScanRelay`, writes the trusted-catalog registry key, registers the `scanrelay://` protocol and
+> creates shortcuts), or use **Insert → Add-ins → My Add-ins → Upload My Add-in** and pick
+> `addin/manifest.xml`.
 
 ### Per-host write behavior
 
@@ -161,6 +200,45 @@ python send_config.py <token>        # push a form config and listen for submiss
 
 Browser debug entry: `http://<LAN-IP>:8765/scan?token=<token>` (built-in jsQR scanner — test the pipeline without a phone).
 
+## Building the installer (for maintainers)
+
+```powershell
+# prerequisites: node/npm, Python (with Pillow), Inno Setup 6.3+
+powershell -ExecutionPolicy Bypass -File packaging\build-release.ps1
+```
+
+Five steps: build the add-in → assemble the bundled Python runtime → generate the icon and notes →
+compile with ISCC → verify and copy to the Desktop.
+
+The installer is **self-contained**: it ships a complete embedded Python runtime (assembled by
+`packaging\fetch-python.ps1`), so the target machine needs neither Python nor .NET — just double-click.
+
+What each file in `packaging/` does:
+
+| File | Purpose |
+|---|---|
+| `build-release.ps1` | one-shot entry point |
+| `fetch-python.ps1` | downloads the python.org embeddable package + cross-installs pinned deps with `pip --target` |
+| `requirements-bundle.txt` | dependency list for the embedded runtime (fewer dev-only extras than `server/requirements.txt`) |
+| `smoke.py` | embedded-runtime self-test: exercises every path `relay.py` / `tray.py` actually use |
+| `make-ico.py` | generates the multi-size `.ico` (same barcode motif as the add-in icon) |
+| `scan-relay.iss` | the Inno Setup script |
+| `install-notes.txt` | the notes shown at the end of installation |
+
+> **One gotcha for build machines**: Inno Setup's official installer is now only published on GitHub
+> Releases. When the direct connection is unreachable, download it through a mirror proxy — but
+> **verify the signature before running it**. A proxy is only a courier; it cannot forge an
+> Authenticode signature:
+> ```powershell
+> signtool verify /pa /v innosetup-x.y.z.exe     # ships with the Windows SDK
+> innosetup-x.y.z.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+> ```
+> Also note: `Get-AuthenticodeSignature` can be unusable in some environments because of a PowerShell
+> module conflict; fall back to `signtool` or read the certificate object directly
+> (`[Security.Cryptography.X509Certificates.X509Certificate]::new($path)`).
+> Do not identify the signer by parsing `signtool` output text — it is localized, and a Chinese-locale
+> machine has no `Subject:` line at all.
+
 ## Verified
 
 - [x] Relay end-to-end automated test (9/9 assertions)
@@ -169,11 +247,19 @@ Browser debug entry: `http://<LAN-IP>:8765/scan?token=<token>` (built-in jsQR sc
 - [x] Real phone + Excel (M365) sideload, QR pairing and scan pipeline all working
 - [x] Multi-host manifest (Workbook/Document/Presentation + generic Office 1.1 requirement set)
 - [x] launcher.vbs cold start: `scanrelay://` protocol launch → both healthz endpoints up (avoids the Hyper-V-reserved 3000/3443)
+- [x] Clipboard injection end-to-end: `POST /inject` (loopback only) → a fake `role=addin` connection receives `value` / `symbology=CLIPBOARD` / `source=clipboard`
+- [x] Tray log fallback: when `relay.log` is held exclusively (cmd `>>` redirection does not share write access) tray logging falls back to `tray.log`, and the relay **still starts normally** (before the fix it gave up because writing the banner failed)
+- [x] Installer end-to-end on a clean machine: silent install → URL protocol, shortcuts and the TrustedCatalogs key all correct; desktop-icon start brings the relay up in ~1 s; the embedded runtime passes a 17/17 self-test
+- [x] Certificate path on a machine with no `office-addin-dev-certs`: the relay generates a self-signed cert, installs it into the user Root store and records its SHA-1 thumbprint
+- [x] Clean uninstall: tray and relay exited, `{app}` and the state dir removed including runtime-generated `.certs` / `__pycache__`, the recorded certificate deleted from the Root store, and registry / protocol / shortcuts / ARP all gone
+- [x] Double-click recovery: with the relay stopped but the tray still running, launching the icon again restarts the relay (previously the second instance hit the single-instance mutex and exited, leaving the service down for good)
 
 ## FAQ
 
 - **Phone cannot connect**: allow 8765 in the firewall; phone and PC must be on the same LAN (guest networks are usually isolated); `curl http://<IP>:8765/` opening in the phone browser means it works
-- **Add-in cannot connect**: start the relay first (status card in the pane / shortcut / 启动Scan-Relay.bat — any one)
+- **Add-in cannot connect**: start the relay first (the pane's status card / the desktop "Scan-Relay" icon / the tray menu's start·restart item — any one)
+- **No Scan-Relay icon in the notification area**: Windows hides new tray icons inside the "show hidden icons" overflow ("^") by default. Open it once and drag the icon out to pin it — a one-time step. If it is not there at all, the service has never been started: double-click the desktop "Scan-Relay" icon.
+- **After uninstalling and reinstalling, `https://localhost:4443` reports a certificate error**: expected — the old certificate was removed together with the uninstall. Double-click the desktop icon and the service generates and installs a fresh one.
 - **"Port busy" but nothing in netstat**: Hyper-V/WinNAT dynamic port reservations swallowed the port (bind fails with WinError 10013); check with `netsh int ipv4 show excludedportrange protocol=tcp`. Defaults avoid this (8765/4443); if a custom port collides, pick another or reboot (reservations are re-assigned each boot)
 - **Why the add-in does not connect to ws://LAN-IP directly**: Office add-in pages force HTTPS; a direct ws:// is blocked as mixed content, so traffic is proxied through `wss://localhost:4443/relay` (see the `/relay/*` routes in `server/relay.py`)
 - **Excel sideload gotchas** (from real debugging):

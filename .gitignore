@@ -28,3 +28,10 @@ key.properties
 # ---- 杂项 ----
 *.log
 .DS_Store
+.ruff_cache/
+
+# ---- 安装包构建产物（由 packaging/build-release.ps1 产出）----
+dist/
+# 内嵌运行时的下载缓存（python.org 内嵌包 + pip wheel 缓存，约 40 MB）
+packaging/.cache/
+__pycache__/

@@ -1,0 +1,32 @@
+# 内嵌 Python 运行时的依赖清单（与 requirements.txt 分开）
+#
+# 为什么要单独一份：
+#   requirements.txt 里的 uvicorn[standard] 会额外拖进 httptools / watchfiles /
+#   pyyaml / colorama —— 那些是开发期 --reload 用的，生产服务用不上，
+#   平白多出约 8 MB 和 3 个需要预编译 wheel 的包（也就多 3 个下载失败的机会）。
+#
+# 为什么全部钉死版本：
+#   开发机上这套组合已经把扫码链路验证过了（服务、加载项、注入都跑通），
+#   让 pip 重新解析出一套新版本等于把验证结果作废。要升级就显式改这里再重测。
+
+# ---- 服务端（server/relay.py）----
+fastapi==0.143.3
+starlette==1.8.0
+pydantic==2.14.1
+pydantic_core==2.50.1
+uvicorn==0.54.0
+websockets==17.2
+h11==0.16.0
+anyio==4.15.1
+click==8.5.0
+
+# ---- 证书（server/relay.py 生成 localhost 自签名证书）----
+# 这个依赖原本**漏写**在 requirements.txt 里：relay.py 是 lazy import 它的，
+# 只有 ~/.office-addin-dev-certs 不存在、真正走到生成证书那一步才会炸。
+# 开发机因为早就装过 dev-certs 一直走短路，所以没暴露。
+cryptography==50.0.2
+
+# ---- 托盘（server/tray.py）----
+pystray==0.19.5
+pillow==13.0.0
+winotify==1.1.0
