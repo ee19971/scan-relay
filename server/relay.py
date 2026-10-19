@@ -313,6 +313,27 @@ def _record_cert_thumbprint(thumbprint: str) -> None:
         log.debug("记录证书指纹失败（不影响使用）: %r", exc)
 
 
+def _console_text(raw: bytes) -> str:
+    """解码控制台程序（certutil）的输出。
+
+    **不能**给 subprocess 传 text=True：那会按 locale 编码解码，而 tray.py 给中转
+    服务子进程设了 PYTHONUTF8=1，于是 Python 改用 UTF-8 去解 certutil 输出的
+    GBK 中文 —— 读取线程会直接抛 UnicodeDecodeError。子进程本身是成功的，
+    但每次全新安装的第一次启动，日志里都会多出一段谁都看不懂的 traceback。
+    这里显式按系统 OEM 代码页解码。
+    """
+    try:
+        import ctypes
+
+        enc = f"cp{ctypes.windll.kernel32.GetOEMCP()}"
+    except Exception:  # noqa: BLE001
+        enc = "utf-8"
+    try:
+        return raw.decode(enc, "replace")
+    except LookupError:
+        return raw.decode("utf-8", "replace")
+
+
 def ensure_selfsigned_cert() -> tuple[Path, Path]:
     """生成 localhost 自签名证书并安装到当前用户受信根目录（无需管理员）。"""
     from cryptography import x509
@@ -358,7 +379,7 @@ def ensure_selfsigned_cert() -> tuple[Path, Path]:
     # 安装到当前用户受信根存储，Excel/WebView2 即会信任
     result = subprocess.run(
         ["certutil", "-user", "-addstore", "Root", str(crt)],
-        capture_output=True, text=True,
+        capture_output=True,
     )
     if result.returncode == 0:
         log.info("证书已加入当前用户受信根目录")
@@ -368,7 +389,7 @@ def ensure_selfsigned_cert() -> tuple[Path, Path]:
         # 只在真正装进证书存储成功后才记 —— 装失败就不用记了。
         _record_cert_thumbprint(cert.fingerprint(hashes.SHA1()).hex().upper())
     else:
-        log.warning("证书自动安装失败（%s），Excel 可能提示证书错误", result.stderr.strip())
+        log.warning("证书自动安装失败（%s），Excel 可能提示证书错误", _console_text(result.stderr).strip())
     return crt, key
 
 

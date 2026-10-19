@@ -424,7 +424,7 @@ def quit_tray_instance(timeout: float = 10.0) -> bool:
         try:
             subprocess.run(
                 ["taskkill", "/PID", str(pid), "/F", "/T"],
-                capture_output=True, text=True, timeout=15,
+                capture_output=True, timeout=15,
             )
         except Exception as exc:  # noqa: BLE001
             tray_log(f"taskkill {pid} 异常: {exc!r}")
